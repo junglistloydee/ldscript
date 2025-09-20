@@ -23,6 +23,7 @@ The goal is to provide a syntax that is easy for game designers and writers to r
 *   **Functions and Events:** Reusable blocks of code and event-driven scripting.
 *   **Randomization:** Generate random numbers for loot drops, damage calculation, etc.
 *   **Sound and Music:** Play sound effects and background music.
+*   **Multiplayer:** A client-server model for networked gameplay.
 
 ## Syntax
 
@@ -211,12 +212,48 @@ play_sound "sounds/sword_swing.wav"
 play_music "music/battle_theme.mp3"
 ```
 
+### Multiplayer
+ldscript now supports a basic client-server multiplayer model. One player acts as the "host" (the server), and other players connect as "clients". The host is the single source of truth for the game state.
+
+When a client performs an action that changes the game (like attacking a monster), it sends the command to the host. The host executes the command and then broadcasts the new, updated game state to all connected clients.
+
+#### `player_template` Entity
+To support multiplayer, your script should define an entity named `player_template`. This entity is used as a blueprint by the server to create a new player entity every time a new client connects.
+
+```ldscript
+entity player_template
+    stat health 100
+    stat strength 10
+end entity
+```
+
+#### `local_player` Variable
+When writing scripts for multiplayer, you can use the special `local_player` variable. This variable automatically resolves to the unique ID of the player running the command. This is essential for commands like `attack` where you need to specify who is performing the action.
+
+```ldscript
+# When a client runs this, 'local_player' becomes their unique ID (e.g., 'player_2')
+attack local_player on goblin
+```
+
 ## Usage
 
-To run an ldscript file, you need Python 3 installed. Use the `ldscript_interpreter.py` script and provide the path to your `.ld` file as an argument.
+To run an ldscript file, you need Python 3 installed. Use the `ldscript_interpreter.py` script.
 
+**Single Player:**
 ```bash
 python ldscript_interpreter.py path/to/your/script.ld
+```
+
+**Multiplayer Host:**
+To host a game, use the `--host` flag. This will start a server on the default IP (127.0.0.1) and port (65432).
+```bash
+python ldscript_interpreter.py path/to/your/script.ld --host
+```
+
+**Multiplayer Client:**
+To connect to a host, use the `--connect` flag followed by the host's IP address.
+```bash
+python ldscript_interpreter.py path/to/your/script.ld --connect 127.0.0.1
 ```
 
 ### Full Example (`main.ld`)
