@@ -1,5 +1,7 @@
 import re
 import sys
+import random
+import pygame
 
 class Interpreter:
     """
@@ -7,12 +9,21 @@ class Interpreter:
     to support control structures like conditionals and loops.
     """
     def __init__(self):
+        try:
+            pygame.mixer.init()
+            self.sound_enabled = True
+        except pygame.error:
+            self.sound_enabled = False
+            print("Warning: Pygame mixer could not be initialized. Sound will be disabled.", file=sys.stderr)
         self.variables = {}
         self.cutscenes = {}
         self.dialogs = {}
         self.quests = {}
         self.skills = []
         self.inventory = {}
+        self.entities = {}
+        self.functions = {}
+        self.events = {}
 
     def run_from_file(self, filepath):
         """Loads, parses, and executes an ldscript file."""
@@ -81,6 +92,29 @@ class Interpreter:
                 i += 1
                 continue
 
+            match_function_def = re.match(r'function (\w+)', line)
+            if match_function_def:
+                name = match_function_def.group(1)
+                function_block, end_index = self._parse(lines, i + 1, end_keywords=['end function'])
+                self.functions[name] = function_block
+                i = end_index + 1
+                continue
+
+            match_call = re.match(r'call (\w+)', line)
+            if match_call:
+                name = match_call.group(1)
+                ast.append({'type': 'call_function', 'name': name})
+                i += 1
+                continue
+
+            match_on_event = re.match(r'on (\w+)', line)
+            if match_on_event:
+                name = match_on_event.group(1)
+                event_block, end_index = self._parse(lines, i + 1, end_keywords=['end event'])
+                self.events[name] = event_block
+                i = end_index + 1
+                continue
+
             match_dialog_def = re.match(r'dialog (\w+)', line)
             if match_dialog_def:
                 name = match_dialog_def.group(1)
@@ -94,6 +128,14 @@ class Interpreter:
                 name = match_start_dialog.group(1)
                 ast.append({'type': 'start_dialog', 'name': name})
                 i += 1
+                continue
+
+            match_entity_def = re.match(r'entity (\w+)', line)
+            if match_entity_def:
+                name = match_entity_def.group(1)
+                entity_block, end_index = self._parse_entity_block(lines, i + 1)
+                self.entities[name] = entity_block
+                i = end_index + 1
                 continue
 
             match_quest_def = re.match(r'quest (\w+) "([^"]*)"', line)
@@ -160,6 +202,13 @@ class Interpreter:
                 i += 1
                 continue
 
+            match_attack = re.match(r'attack (\w+) on (\w+)(?: with (\w+))?', line)
+            if match_attack:
+                attacker, target, weapon = match_attack.groups()
+                ast.append({'type': 'attack', 'attacker': attacker, 'target': target, 'weapon': weapon})
+                i += 1
+                continue
+
             match_loop = re.match(r'loop (.*) times', line)
             if match_loop:
                 count_expr = match_loop.group(1).strip()
@@ -182,7 +231,28 @@ class Interpreter:
                 i += 1
                 continue
 
-            if line in ['else', 'end', 'end cutscene', 'end dialog', 'end option', 'end quest']:
+            match_random = re.match(r'random (\w+) from (.*) to (.*)', line)
+            if match_random:
+                var_name, min_val, max_val = match_random.groups()
+                ast.append({'type': 'random', 'name': var_name.strip(), 'min': min_val.strip(), 'max': max_val.strip()})
+                i += 1
+                continue
+
+            match_play_sound = re.match(r'play_sound (.*)', line)
+            if match_play_sound:
+                filepath = match_play_sound.group(1)
+                ast.append({'type': 'play_sound', 'filepath': filepath.strip()})
+                i += 1
+                continue
+
+            match_play_music = re.match(r'play_music (.*)', line)
+            if match_play_music:
+                filepath = match_play_music.group(1)
+                ast.append({'type': 'play_music', 'filepath': filepath.strip()})
+                i += 1
+                continue
+
+            if line in ['else', 'end', 'end cutscene', 'end dialog', 'end option', 'end quest', 'end entity', 'end function', 'end event']:
                 # These keywords are handled by the block parsing logic, so they are unexpected here.
                 raise SyntaxError(f"Unexpected '{line}' keyword.")
             raise SyntaxError(f"Unknown command: {line}")
@@ -231,6 +301,24 @@ class Interpreter:
 
         raise SyntaxError("Expected 'end dialog' but reached end of file.")
 
+    def _parse_entity_block(self, lines, index):
+        """Parses the stats of an entity block."""
+        stats = {}
+        i = index
+        while i < len(lines):
+            line = lines[i]
+            if line == 'end entity':
+                return stats, i
+
+            match_stat = re.match(r'stat (\w+) (.*)', line)
+            if match_stat:
+                name, value = match_stat.groups()
+                stats[name] = self._evaluate_expression(value)
+            else:
+                raise SyntaxError(f"Invalid line in entity definition: {line}")
+            i += 1
+        raise SyntaxError("Expected 'end entity' but reached end of file.")
+
     def _parse_quest_block(self, lines, index):
         """Parses the properties of a quest block."""
         properties = {}
@@ -274,6 +362,8 @@ class Interpreter:
             return self._execute_loop(command)
         elif command_type == 'play_cutscene':
             return self._execute_play_cutscene(command)
+        elif command_type == 'call_function':
+            return self._execute_call_function(command)
         elif command_type == 'start_dialog':
             return self._execute_start_dialog(command)
         elif command_type == 'set_quest':
@@ -290,10 +380,93 @@ class Interpreter:
             return self._execute_give_item(command)
         elif command_type == 'take_item':
             return self._execute_take_item(command)
+        elif command_type == 'attack':
+            return self._execute_attack(command)
+        elif command_type == 'random':
+            return self._execute_random(command)
+        elif command_type == 'play_sound':
+            return self._execute_play_sound(command)
+        elif command_type == 'play_music':
+            return self._execute_play_music(command)
         elif command_type == 'break':
             return 'break'
         elif command_type == 'continue':
             return 'continue'
+        return None
+
+    def _execute_random(self, command):
+        """Executes a 'random' command."""
+        var_name = command['name']
+        min_val_str = command['min']
+        max_val_str = command['max']
+
+        min_val = self._evaluate_expression(min_val_str)
+        max_val = self._evaluate_expression(max_val_str)
+
+        try:
+            min_int = int(min_val)
+            max_int = int(max_val)
+            self.variables[var_name] = random.randint(min_int, max_int)
+        except (ValueError, TypeError):
+            print(f"Error: min and max for random must be integers.", file=sys.stderr)
+
+        return None
+
+    def _execute_attack(self, command):
+        """Executes an 'attack' command."""
+        attacker_name = command['attacker']
+        target_name = command['target']
+
+        attacker = self.entities.get(attacker_name)
+        target = self.entities.get(target_name)
+
+        if not attacker:
+            print(f"Error: Attacker '{attacker_name}' not found.", file=sys.stderr)
+            return None
+        if not target:
+            print(f"Error: Target '{target_name}' not found.", file=sys.stderr)
+            return None
+
+        attacker_strength = attacker.get('strength', 1)
+        damage = random.randint(1, int(attacker_strength))
+
+        if attacker.get('health', 0) <= 0:
+            print(f"Error: {attacker_name} is already defeated and cannot attack.", file=sys.stderr)
+            return None
+
+        target['health'] = target.get('health', 0) - damage
+
+        print(f"{attacker_name} attacks {target_name} for {damage} damage!")
+        if target['health'] <= 0:
+            target['health'] = 0 # Prevent health from going into negative
+            print(f"{target_name} has been defeated.")
+            self.variables['last_death'] = target_name
+            self._trigger_event('death')
+
+        return None
+
+    def _execute_play_sound(self, command):
+        """Executes a 'play_sound' command."""
+        if not self.sound_enabled:
+            return None
+        filepath = self._evaluate_expression(command['filepath'])
+        try:
+            sound = pygame.mixer.Sound(filepath)
+            sound.play()
+        except pygame.error as e:
+            print(f"Error playing sound '{filepath}': {e}", file=sys.stderr)
+        return None
+
+    def _execute_play_music(self, command):
+        """Executes a 'play_music' command."""
+        if not self.sound_enabled:
+            return None
+        filepath = self._evaluate_expression(command['filepath'])
+        try:
+            pygame.mixer.music.load(filepath)
+            pygame.mixer.music.play(-1)  # -1 means loop indefinitely
+        except pygame.error as e:
+            print(f"Error playing music '{filepath}': {e}", file=sys.stderr)
         return None
 
     def _execute_play_cutscene(self, command):
@@ -304,6 +477,21 @@ class Interpreter:
         else:
             print(f"Error: Cutscene '{name}' not defined.", file=sys.stderr)
             return None
+
+    def _execute_call_function(self, command):
+        """Executes a 'call' command."""
+        name = command['name']
+        if name in self.functions:
+            return self._execute_block(self.functions[name])
+        else:
+            print(f"Error: Function '{name}' not defined.", file=sys.stderr)
+            return None
+
+    def _trigger_event(self, event_name):
+        """Executes an event block if it exists."""
+        if event_name in self.events:
+            return self._execute_block(self.events[event_name])
+        return None
 
     def _execute_loop(self, loop_command):
         """Executes a 'loop' command, handling break and continue."""
@@ -387,11 +575,14 @@ class Interpreter:
 
     def _execute_say(self, message):
         def replace_var(match):
-            var_name = match.group(1)
-            return str(self.variables.get(var_name, f"{{{var_name}}}"))
+            var_path = match.group(1)
+            value = self._evaluate_expression(var_path)
+            return str(value) if value is not None else f"{{{var_path}}}"
+
         if message.startswith('"') and message.endswith('"'):
             message = message[1:-1]
-        interpolated_message = re.sub(r'\{(\w+)\}', replace_var, message)
+
+        interpolated_message = re.sub(r'\{([\w\.]+)\}', replace_var, message)
         print(interpolated_message)
 
     def _execute_define(self, name, value_str):
@@ -468,8 +659,26 @@ class Interpreter:
 
     def _evaluate_expression(self, expr_str):
         expr_str = expr_str.strip()
+
+        if expr_str.startswith('{') and expr_str.endswith('}'):
+            expr_str = expr_str[1:-1]
+
+        # Entity stat access, e.g., "player.health"
+        parts = expr_str.split('.')
+        if len(parts) == 2:
+            entity_name, stat_name = parts
+            if entity_name in self.entities and stat_name in self.entities[entity_name]:
+                return self.entities[entity_name][stat_name]
+
+        # Simple variable
+        if expr_str in self.variables:
+            return self.variables[expr_str]
+
+        # Literal string
         if expr_str.startswith('"') and expr_str.endswith('"'):
             return expr_str[1:-1]
+
+        # Literal number
         try:
             return int(expr_str)
         except ValueError:
@@ -477,8 +686,7 @@ class Interpreter:
                 return float(expr_str)
             except ValueError:
                 pass
-        if expr_str in self.variables:
-            return self.variables[expr_str]
+
         return expr_str
 
     def _evaluate_condition(self, condition_str):
