@@ -11,6 +11,8 @@ class Interpreter:
         self.cutscenes = {}
         self.dialogs = {}
         self.quests = {}
+        self.skills = []
+        self.inventory = {}
 
     def run_from_file(self, filepath):
         """Loads, parses, and executes an ldscript file."""
@@ -106,6 +108,55 @@ class Interpreter:
             if match_set_quest:
                 quest_id, new_state = match_set_quest.groups()
                 ast.append({'type': 'set_quest', 'id': quest_id, 'state': new_state})
+                i += 1
+                continue
+
+            match_set_stat = re.match(r'set stat (\w+) to (.*)', line)
+            if match_set_stat:
+                name, value = match_set_stat.groups()
+                ast.append({'type': 'define', 'name': name.strip(), 'value': value.strip()})
+                i += 1
+                continue
+
+            match_increase_stat = re.match(r'increase stat (\w+) by (.*)', line)
+            if match_increase_stat:
+                name, value = match_increase_stat.groups()
+                ast.append({'type': 'increase_stat', 'name': name.strip(), 'value': value.strip()})
+                i += 1
+                continue
+
+            match_decrease_stat = re.match(r'decrease stat (\w+) by (.*)', line)
+            if match_decrease_stat:
+                name, value = match_decrease_stat.groups()
+                ast.append({'type': 'decrease_stat', 'name': name.strip(), 'value': value.strip()})
+                i += 1
+                continue
+
+            match_learn_skill = re.match(r'learn skill (\w+)', line)
+            if match_learn_skill:
+                name = match_learn_skill.group(1)
+                ast.append({'type': 'learn_skill', 'name': name})
+                i += 1
+                continue
+
+            match_forget_skill = re.match(r'forget skill (\w+)', line)
+            if match_forget_skill:
+                name = match_forget_skill.group(1)
+                ast.append({'type': 'forget_skill', 'name': name})
+                i += 1
+                continue
+
+            match_give = re.match(r'give (?:(\d+)\s+)?(\w+)', line)
+            if match_give:
+                count, name = match_give.groups()
+                ast.append({'type': 'give_item', 'name': name, 'count': count or "1"})
+                i += 1
+                continue
+
+            match_take = re.match(r'take (?:(\d+)\s+)?(\w+)', line)
+            if match_take:
+                count, name = match_take.groups()
+                ast.append({'type': 'take_item', 'name': name, 'count': count or "1"})
                 i += 1
                 continue
 
@@ -227,6 +278,18 @@ class Interpreter:
             return self._execute_start_dialog(command)
         elif command_type == 'set_quest':
             return self._execute_set_quest(command)
+        elif command_type == 'increase_stat':
+            return self._execute_increase_stat(command)
+        elif command_type == 'decrease_stat':
+            return self._execute_decrease_stat(command)
+        elif command_type == 'learn_skill':
+            return self._execute_learn_skill(command)
+        elif command_type == 'forget_skill':
+            return self._execute_forget_skill(command)
+        elif command_type == 'give_item':
+            return self._execute_give_item(command)
+        elif command_type == 'take_item':
+            return self._execute_take_item(command)
         elif command_type == 'break':
             return 'break'
         elif command_type == 'continue':
@@ -334,6 +397,75 @@ class Interpreter:
     def _execute_define(self, name, value_str):
         self.variables[name] = self._evaluate_expression(value_str)
 
+    def _execute_increase_stat(self, command):
+        name = command['name']
+        value_str = command['value']
+
+        current_value = self.variables.get(name, 0)
+        increase_by = self._evaluate_expression(value_str)
+
+        try:
+            self.variables[name] = float(current_value) + float(increase_by)
+        except (ValueError, TypeError):
+            print(f"Error: Stat '{name}' and value for increasing must be numeric.", file=sys.stderr)
+
+        return None
+
+    def _execute_decrease_stat(self, command):
+        name = command['name']
+        value_str = command['value']
+
+        current_value = self.variables.get(name, 0)
+        decrease_by = self._evaluate_expression(value_str)
+
+        try:
+            self.variables[name] = float(current_value) - float(decrease_by)
+        except (ValueError, TypeError):
+            print(f"Error: Stat '{name}' and value for decreasing must be numeric.", file=sys.stderr)
+
+        return None
+
+    def _execute_learn_skill(self, command):
+        skill_name = command['name']
+        if skill_name not in self.skills:
+            self.skills.append(skill_name)
+        return None
+
+    def _execute_forget_skill(self, command):
+        skill_name = command['name']
+        if skill_name in self.skills:
+            self.skills.remove(skill_name)
+        return None
+
+    def _execute_give_item(self, command):
+        item_name = command['name']
+        count = int(self._evaluate_expression(command['count']))
+
+        if count <= 0:
+            return None
+
+        current_count = self.inventory.get(item_name, 0)
+        self.inventory[item_name] = current_count + count
+        return None
+
+    def _execute_take_item(self, command):
+        item_name = command['name']
+        count = int(self._evaluate_expression(command['count']))
+
+        if count <= 0:
+            return None
+
+        current_count = self.inventory.get(item_name, 0)
+
+        if current_count >= count:
+            self.inventory[item_name] = current_count - count
+            if self.inventory[item_name] == 0:
+                del self.inventory[item_name]
+        else:
+            print(f"Error: Not enough '{item_name}' to take. Have {current_count}, need {count}.", file=sys.stderr)
+
+        return None
+
     def _evaluate_expression(self, expr_str):
         expr_str = expr_str.strip()
         if expr_str.startswith('"') and expr_str.endswith('"'):
@@ -350,6 +482,19 @@ class Interpreter:
         return expr_str
 
     def _evaluate_condition(self, condition_str):
+        # Check for skill condition, e.g., "has skill magic"
+        match_skill = re.match(r'has skill (\w+)', condition_str)
+        if match_skill:
+            skill_name = match_skill.group(1)
+            return skill_name in self.skills
+
+        # Check for item condition, e.g., "has 5 potion" or "has key"
+        match_item = re.match(r'has (?:(\d+)\s+)?(\w+)', condition_str)
+        if match_item:
+            count_str, item_name = match_item.groups()
+            required_count = int(count_str) if count_str else 1
+            return self.inventory.get(item_name, 0) >= required_count
+
         # Check for quest status condition, e.g., "quest find_sword is active"
         match_quest = re.match(r'quest (\w+) is (\w+)', condition_str)
         if match_quest:
