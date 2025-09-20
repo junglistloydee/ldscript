@@ -16,6 +16,9 @@ The goal is to provide a syntax that is easy for game designers and writers to r
 *   **Cutscenes:** Define and play non-interactive sequences.
 *   **Dialogs:** Create interactive conversations with player choices.
 *   **Quests:** Define and track the state of quests.
+*   **Character Stats:** Manipulate character attributes like health and strength.
+*   **Character Skills:** Grant and revoke character skills.
+*   **Inventory Management:** Give and take items from the player.
 
 ## Syntax
 
@@ -103,6 +106,52 @@ end
 set quest find_sword to active
 ```
 
+### Character Stats
+Manage numerical attributes for the player character. Stats are stored as variables and can be used in `say` commands and `if` conditions.
+
+- `set stat <name> to <value>`: Sets a stat to a specific value.
+- `increase stat <name> by <value>`: Increases a stat by a certain amount.
+- `decrease stat <name> by <value>`: Decreases a stat by a certain amount.
+
+```ldscript
+set stat health to 100
+increase stat strength by 5
+say "Your strength is now {strength}."
+```
+
+### Character Skills
+Grant or revoke skills. Skills are simple flags that can be checked in conditions.
+
+- `learn skill <name>`: Adds a skill to the character.
+- `forget skill <name>`: Removes a skill from the character.
+- `if has skill <name>`: Checks if the character possesses a skill.
+
+```ldscript
+learn skill stealth
+if has skill stealth
+    say "You can move silently."
+end
+```
+
+### Inventory Management
+Give items to or take items from the player.
+
+- `give <count> <item_name>`: Adds one or more items to the player's inventory.
+- `take <count> <item_name>`: Removes one or more items.
+- `if has <item_name>` or `if has <count> <item_name>`: Checks if the player has a certain number of an item.
+
+If `<count>` is omitted, it defaults to 1.
+
+```ldscript
+give 5 health_potion
+give key
+take 2 health_potion
+
+if has key
+    say "You can open the door."
+end
+```
+
 ## Usage
 
 To run an ldscript file, you need Python 3 installed. Use the `ldscript_interpreter.py` script and provide the path to your `.ld` file as an argument.
@@ -117,9 +166,10 @@ Here is an example that ties all the features together:
 ```ldscript
 # ldscript example demonstrating all features
 
-# Define variables
+# Define variables and stats
 define playerName as "Alex"
 define npcName as "the old man"
+set stat health to 100
 
 # Define a quest
 quest find_amulet "The Lost Amulet"
@@ -130,7 +180,7 @@ end quest
 # Define a cutscene for the intro
 cutscene game_intro
     say "In a quiet village, a new story begins."
-    say "{playerName} is looking for an adventure."
+    say "{playerName} is looking for an adventure with {health} HP."
     say "You see {npcName} sitting by the well."
 end cutscene
 
@@ -157,6 +207,8 @@ dialog old_man_talk
             say "{npcName}: 'You did! Oh, thank you, thank you!'"
             say "You hand the amulet to the old man."
             set quest find_amulet to completed
+            say "{npcName}: 'Please, take this for your troubles.'"
+            give 50 gold
         end option
     end if
 end dialog
@@ -172,6 +224,9 @@ start dialog old_man_talk
 # Check the final quest status
 if quest find_amulet is completed
     say "You have completed the quest!"
+    if has 50 gold
+        say "You received a reward of 50 gold."
+    end
 elif quest find_amulet is active
     say "You are still on the quest to find the amulet."
 else
