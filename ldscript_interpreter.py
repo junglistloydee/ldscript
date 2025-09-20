@@ -8,6 +8,9 @@ class Interpreter:
     """
     def __init__(self):
         self.variables = {}
+        self.cutscenes = {}
+        self.dialogs = {}
+        self.quests = {}
 
     def run_from_file(self, filepath):
         """Loads, parses, and executes an ldscript file."""
@@ -61,6 +64,51 @@ class Interpreter:
                 i += 1
                 continue
 
+            match_cutscene_def = re.match(r'cutscene (\w+)', line)
+            if match_cutscene_def:
+                name = match_cutscene_def.group(1)
+                cutscene_block, end_index = self._parse(lines, i + 1, end_keywords=['end cutscene'])
+                self.cutscenes[name] = cutscene_block
+                i = end_index + 1
+                continue
+
+            match_play = re.match(r'play cutscene (\w+)', line)
+            if match_play:
+                name = match_play.group(1)
+                ast.append({'type': 'play_cutscene', 'name': name})
+                i += 1
+                continue
+
+            match_dialog_def = re.match(r'dialog (\w+)', line)
+            if match_dialog_def:
+                name = match_dialog_def.group(1)
+                dialog_block, end_index = self._parse_dialog_block(lines, i + 1)
+                self.dialogs[name] = dialog_block
+                i = end_index + 1
+                continue
+
+            match_start_dialog = re.match(r'start dialog (\w+)', line)
+            if match_start_dialog:
+                name = match_start_dialog.group(1)
+                ast.append({'type': 'start_dialog', 'name': name})
+                i += 1
+                continue
+
+            match_quest_def = re.match(r'quest (\w+) "([^"]*)"', line)
+            if match_quest_def:
+                quest_id, quest_name = match_quest_def.groups()
+                properties, end_index = self._parse_quest_block(lines, i + 1)
+                self.quests[quest_id] = {'id': quest_id, 'name': quest_name, **properties}
+                i = end_index + 1
+                continue
+
+            match_set_quest = re.match(r'set quest (\w+) to (\w+)', line)
+            if match_set_quest:
+                quest_id, new_state = match_set_quest.groups()
+                ast.append({'type': 'set_quest', 'id': quest_id, 'state': new_state})
+                i += 1
+                continue
+
             match_loop = re.match(r'loop (.*) times', line)
             if match_loop:
                 count_expr = match_loop.group(1).strip()
@@ -83,13 +131,76 @@ class Interpreter:
                 i += 1
                 continue
 
-            if line in ['else', 'end']:
+            if line in ['else', 'end', 'end cutscene', 'end dialog', 'end option', 'end quest']:
+                # These keywords are handled by the block parsing logic, so they are unexpected here.
                 raise SyntaxError(f"Unexpected '{line}' keyword.")
             raise SyntaxError(f"Unknown command: {line}")
 
         if end_keywords:
             raise SyntaxError(f"Expected one of '{end_keywords}' but reached end of file.")
         return ast, i
+
+    def _parse_dialog_block(self, lines, index):
+        """
+        Parses the contents of a dialog block, separating initial 'say' commands
+        from subsequent 'option' blocks.
+        """
+        say_nodes = []
+        options = []
+        i = index
+
+        # First, parse all initial 'say' commands
+        while i < len(lines):
+            line = lines[i]
+            if line == 'end dialog':
+                return {'say_nodes': say_nodes, 'options': options}, i
+
+            match_say = re.match(r'say (.*)', line)
+            if match_say:
+                say_nodes.append({'type': 'say', 'value': match_say.group(1).strip()})
+                i += 1
+            else:
+                # The first non-'say' command must be an 'option'
+                break
+
+        # Now, parse 'option' blocks
+        while i < len(lines):
+            line = lines[i]
+            if line == 'end dialog':
+                return {'say_nodes': say_nodes, 'options': options}, i
+
+            match_option = re.match(r'option ("[^"]*")', line)
+            if not match_option:
+                raise SyntaxError(f"Expected 'option' or 'end dialog' inside a dialog block, but got: {line}")
+
+            option_text = match_option.group(1)[1:-1]  # Remove quotes
+            option_block, end_index = self._parse(lines, i + 1, end_keywords=['end option'])
+            options.append({'text': option_text, 'block': option_block})
+            i = end_index + 1 # Skip past 'end option'
+
+        raise SyntaxError("Expected 'end dialog' but reached end of file.")
+
+    def _parse_quest_block(self, lines, index):
+        """Parses the properties of a quest block."""
+        properties = {}
+        i = index
+        while i < len(lines):
+            line = lines[i]
+            if line == 'end quest':
+                return properties, i
+
+            match_prop = re.match(r'(\w+)\s+(.*)', line)
+            if match_prop:
+                key, value = match_prop.groups()
+                # Simple evaluation for the value
+                if value.startswith('"') and value.endswith('"'):
+                    properties[key] = value[1:-1]
+                else:
+                    properties[key] = value
+            else:
+                raise SyntaxError(f"Invalid property line in quest definition: {line}")
+            i += 1
+        raise SyntaxError("Expected 'end quest' but reached end of file.")
 
     def _execute_block(self, block):
         """Executes a block of commands, handling control flow signals."""
@@ -110,11 +221,26 @@ class Interpreter:
             return self._execute_if(command)
         elif command_type == 'loop':
             return self._execute_loop(command)
+        elif command_type == 'play_cutscene':
+            return self._execute_play_cutscene(command)
+        elif command_type == 'start_dialog':
+            return self._execute_start_dialog(command)
+        elif command_type == 'set_quest':
+            return self._execute_set_quest(command)
         elif command_type == 'break':
             return 'break'
         elif command_type == 'continue':
             return 'continue'
         return None
+
+    def _execute_play_cutscene(self, command):
+        """Executes a 'play cutscene' command."""
+        name = command['name']
+        if name in self.cutscenes:
+            return self._execute_block(self.cutscenes[name])
+        else:
+            print(f"Error: Cutscene '{name}' not defined.", file=sys.stderr)
+            return None
 
     def _execute_loop(self, loop_command):
         """Executes a 'loop' command, handling break and continue."""
@@ -140,6 +266,53 @@ class Interpreter:
             del self.variables['loop_index']
 
         return None  # Loop consumes the signal
+
+    def _execute_set_quest(self, command):
+        """Executes a 'set quest' command."""
+        quest_id = command['id']
+        new_state = command['state']
+        if quest_id in self.quests:
+            self.quests[quest_id]['state'] = new_state
+        else:
+            print(f"Error: Quest '{quest_id}' not defined.", file=sys.stderr)
+        return None
+
+    def _execute_start_dialog(self, command):
+        """Executes a 'start dialog' command."""
+        name = command['name']
+        if name not in self.dialogs:
+            print(f"Error: Dialog '{name}' not defined.", file=sys.stderr)
+            return None
+
+        dialog = self.dialogs[name]
+
+        # Execute all initial 'say' commands
+        for say_command in dialog['say_nodes']:
+            self._execute_command(say_command)
+
+        # Present options to the player
+        if not dialog['options']:
+            return None  # No options to choose from
+
+        print("\nChoose an option:")
+        for i, option in enumerate(dialog['options']):
+            print(f"  {i + 1}: {option['text']}")
+
+        # Get player choice
+        while True:
+            try:
+                choice = input("> ")
+                choice_index = int(choice) - 1
+                if 0 <= choice_index < len(dialog['options']):
+                    chosen_option = dialog['options'][choice_index]
+                    return self._execute_block(chosen_option['block'])
+                else:
+                    print("Invalid choice. Please try again.")
+            except ValueError:
+                print("Invalid input. Please enter a number.")
+            except (EOFError, KeyboardInterrupt):
+                print("\nDialog cancelled.")
+                return None
 
     def _execute_if(self, if_command):
         """Executes an 'if' command, propagating signals."""
@@ -177,6 +350,14 @@ class Interpreter:
         return expr_str
 
     def _evaluate_condition(self, condition_str):
+        # Check for quest status condition, e.g., "quest find_sword is active"
+        match_quest = re.match(r'quest (\w+) is (\w+)', condition_str)
+        if match_quest:
+            quest_id, expected_state = match_quest.groups()
+            if quest_id in self.quests:
+                return self.quests[quest_id].get('state') == expected_state
+            return False
+
         match = re.match(r'(.+?)\s*(>=|<=|==|!=|>|<)\s*(.+)', condition_str)
         if not match:
             value = self._evaluate_expression(condition_str)
