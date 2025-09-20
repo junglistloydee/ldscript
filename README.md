@@ -19,6 +19,10 @@ The goal is to provide a syntax that is easy for game designers and writers to r
 *   **Character Stats:** Manipulate character attributes like health and strength.
 *   **Character Skills:** Grant and revoke character skills.
 *   **Inventory Management:** Give and take items from the player.
+*   **Combat System:** A basic combat system with attack commands.
+*   **Functions and Events:** Reusable blocks of code and event-driven scripting.
+*   **Randomization:** Generate random numbers for loot drops, damage calculation, etc.
+*   **Sound and Music:** Play sound effects and background music.
 
 ## Syntax
 
@@ -150,6 +154,61 @@ take 2 health_potion
 if has key
     say "You can open the door."
 end
+```
+
+### Defining Entities
+Define game entities like the player or enemies using the `entity` block. Each entity can have its own set of stats.
+```ldscript
+entity player
+    stat health 100
+    stat strength 10
+end entity
+
+entity goblin
+    stat health 30
+    stat strength 5
+end entity
+```
+
+### Combat
+Use the `attack` command to make one entity attack another. The damage is calculated based on the attacker's strength.
+```ldscript
+attack player on goblin
+```
+
+### Randomization
+Generate a random number and store it in a variable.
+```ldscript
+random damage from 1 to 10
+say "You deal {damage} damage!"
+```
+
+### Functions and Events
+Define reusable blocks of code with `function` and call them with `call`.
+```ldscript
+function heal_player
+    increase stat health by 10
+    say "You feel refreshed. Your health is now {player.health}."
+end function
+
+call heal_player
+```
+
+Define event handlers that trigger on specific game events. The `on death` event is triggered when an entity's health reaches 0.
+```ldscript
+on death
+    say "{last_death} has been defeated."
+end event
+
+# This will trigger the 'on death' event if the goblin's health drops to 0.
+attack player on goblin
+```
+
+### Sound and Music
+Play sound effects and background music. You'll need to have the `pygame` library installed (`pip install pygame`).
+```ldscript
+play_sound "sounds/sword_swing.wav"
+play_music "music/battle_theme.mp3"
 ```
 
 ## Usage
