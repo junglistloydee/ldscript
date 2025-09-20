@@ -2,6 +2,7 @@ import re
 import sys
 import random
 import pygame
+import os
 
 class Interpreter:
     """
@@ -25,13 +26,47 @@ class Interpreter:
         self.functions = {}
         self.events = {}
 
+    def _preprocess_imports(self, lines, current_dir, processed_files):
+        """
+        Recursively processes 'import' statements in a list of lines.
+        Returns a new list of lines with imported content flattened.
+        """
+        final_lines = []
+        for line in lines:
+            match_import = re.match(r'import "([^"]+)"', line)
+            if match_import:
+                relative_path = match_import.group(1)
+                import_path = os.path.abspath(os.path.join(current_dir, relative_path))
+
+                if import_path in processed_files:
+                    continue  # Skip circular import
+
+                processed_files.add(import_path)
+
+                try:
+                    with open(import_path, 'r') as f:
+                        imported_content = [l.strip() for l in f if l.strip() and not l.strip().startswith('#')]
+
+                    new_dir = os.path.dirname(import_path)
+                    final_lines.extend(self._preprocess_imports(imported_content, new_dir, processed_files))
+                except FileNotFoundError:
+                    print(f"Error: Imported file not found at '{import_path}'", file=sys.stderr)
+                    sys.exit(1)
+            else:
+                final_lines.append(line)
+        return final_lines
+
     def run_from_file(self, filepath):
         """Loads, parses, and executes an ldscript file."""
         try:
-            with open(filepath, 'r') as f:
+            abs_filepath = os.path.abspath(filepath)
+            initial_dir = os.path.dirname(abs_filepath)
+
+            with open(abs_filepath, 'r') as f:
                 lines = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
 
-            ast, _ = self._parse(lines)
+            processed_lines = self._preprocess_imports(lines, initial_dir, set([abs_filepath]))
+            ast, _ = self._parse(processed_lines)
             self._execute_block(ast)
 
         except FileNotFoundError:
