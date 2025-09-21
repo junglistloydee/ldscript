@@ -9,8 +9,9 @@ class GameState:
         self.variables = {}
         self.quests = {}
         self.skills = []
-        self.inventory = {}
+        self.inventory = []  # Changed from dict to list of item dicts
         self.entities = {}
+        self.items = {}  # Central repository for item definitions
 
     def to_json(self):
         """Serializes the game state to a JSON string."""
@@ -20,6 +21,7 @@ class GameState:
             'skills': self.skills,
             'inventory': self.inventory,
             'entities': self.entities,
+            'items': self.items,
         }, indent=4)
 
     def from_json(self, json_string):
@@ -28,5 +30,6 @@ class GameState:
         self.variables = data.get('variables', {})
         self.quests = data.get('quests', {})
         self.skills = data.get('skills', [])
-        self.inventory = data.get('inventory', {})
+        self.inventory = data.get('inventory', [])
         self.entities = data.get('entities', {})
+        self.items = data.get('items', {})

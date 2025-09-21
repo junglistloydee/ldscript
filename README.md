@@ -139,22 +139,64 @@ end
 ```
 
 ### Inventory Management
-Give items to or take items from the player.
+The inventory system allows for creating detailed items and managing a player's inventory.
 
-- `give <count> <item_name>`: Adds one or more items to the player's inventory.
-- `take <count> <item_name>`: Removes one or more items.
-- `if has <item_name>` or `if has <count> <item_name>`: Checks if the player has a certain number of an item.
+- `inventory`: Displays the player's current inventory.
+- `give <count> <item_id>`: Adds one or more items to the player's inventory.
+- `take <count> <item_id>`: Removes one or more items.
+- `if has <item_id>` or `if has <count> <item_id>`: Checks if the player has a certain number of an item.
 
 If `<count>` is omitted, it defaults to 1.
 
 ```ldscript
-give 5 health_potion
-give key
-take 2 health_potion
+# The player is given a potion.
+give 1 potion
 
-if has key
-    say "You can open the door."
+# Check if the player has it.
+if has potion
+    say "You have a healing potion!"
 end
+
+# Show the inventory
+inventory
+```
+
+### Vendors and Shopping
+You can define vendors and their inventories, allowing players to buy and sell items.
+
+#### Defining Items
+Items are defined using the `item` block. They can have properties like a `name`, `description`, and `price`.
+```ldscript
+item sword
+    name "Iron Sword"
+    description "A basic but reliable sword."
+    price 100
+end item
+```
+
+#### Creating a Vendor
+A vendor is an `entity` with an `inventory` stat. The inventory is a comma-separated string of item IDs that the vendor sells.
+```ldscript
+entity blacksmith
+    stat name "Bob the Blacksmith"
+    stat inventory "sword,shield"
+end entity
+```
+
+#### Shopping Commands
+- `shop <vendor_id>`: Displays the items a vendor has for sale.
+- `buy <count> <item_id> from <vendor_id>`: Buys an item from a vendor.
+- `sell <count> <item_id> to <vendor_id>`: Sells an item to a vendor.
+
+```ldscript
+# Show what the blacksmith is selling
+shop blacksmith
+
+# Buy a sword
+buy 1 sword from blacksmith
+
+# Sell a potion
+sell 1 potion to blacksmith
 ```
 
 ### Defining Entities
@@ -256,9 +298,13 @@ To connect to a host, use the `--connect` flag followed by the host's IP address
 python ldscript_interpreter.py path/to/your/script.ld --connect 127.0.0.1
 ```
 
-### Full Example (`main.ld`)
+### Full Examples
 
-Here is an example that ties all the features together:
+Here are some examples that tie all the features together:
+- `main.ld`: A general example showing many features.
+- `vendor_example.ld`: A demonstration of the vendor and shopping system.
+
+#### `main.ld`
 ```ldscript
 # ldscript example demonstrating all features
 
