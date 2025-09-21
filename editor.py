@@ -171,10 +171,35 @@ class App(tk.Tk):
                 code.append(f"{indent}say \"{node.get('text', '')}\"")
             elif node_type == "set_quest":
                 code.append(f"{indent}set quest {node.get('quest_id', '')} to {node.get('state', '')}")
+            elif node_type == "give":
+                code.append(f"{indent}give {node.get('count', 1)} {node.get('item_id', '?')}")
+            elif node_type == "take":
+                code.append(f"{indent}take {node.get('count', 1)} {node.get('item_id', '?')}")
             elif node_type == "option":
                 code.append(f"{indent}option \"{node.get('text', '')}\"")
                 code.extend(self._generate_node_list_code(node.get("nodes", []), indent_level + 1))
                 code.append(f"{indent}end option")
+            elif node_type == "if":
+                code.append(f"{indent}if {node.get('condition', 'true')}")
+
+                child_nodes = node.get("nodes", [])
+                else_marker_index = -1
+                for i, child in enumerate(child_nodes):
+                    if child.get("type") == "else_marker":
+                        else_marker_index = i
+                        break
+
+                if else_marker_index != -1:
+                    then_nodes = child_nodes[:else_marker_index]
+                    else_nodes = child_nodes[else_marker_index+1:]
+                    code.extend(self._generate_node_list_code(then_nodes, indent_level + 1))
+                    code.append(f"{indent}else")
+                    code.extend(self._generate_node_list_code(else_nodes, indent_level + 1))
+                else:
+                    code.extend(self._generate_node_list_code(child_nodes, indent_level + 1))
+
+                code.append(f"{indent}end")
+
         return code
 
     def run_game(self):
@@ -799,6 +824,11 @@ class DialogsTab(ttk.Frame):
         elif node_data["type"] == "set_quest":
             self._create_property_combobox("Quest ID:", node_data, "quest_id", list(self.app.quests_tab.quests_data.keys()))
             self._create_property_combobox("State:", node_data, "state", ["inactive", "active", "completed"])
+        elif node_data["type"] in ["give", "take"]:
+            self._create_property_combobox("Item ID:", node_data, "item_id", list(self.app.items_tab.items_data.keys()))
+            self._create_property_entry("Count:", node_data, "count")
+        elif node_data["type"] == "if":
+            self._create_property_entry("Condition:", node_data, "condition")
 
     def _create_property_entry(self, label, node_data, key):
         ttk.Label(self.properties_frame, text=label).pack(anchor='w', padx=5)
@@ -834,6 +864,14 @@ class DialogsTab(ttk.Frame):
             text = f'option "{node_data.get("text", "")}"'
         elif node_type == "set_quest":
             text = f'set quest {node_data.get("quest_id", "?")} to {node_data.get("state", "?")}'
+        elif node_type == "give":
+            text = f'give {node_data.get("count", 1)} {node_data.get("item_id", "?")}'
+        elif node_type == "take":
+            text = f'take {node_data.get("count", 1)} {node_data.get("item_id", "?")}'
+        elif node_type == "if":
+            text = f'if {node_data.get("condition", "...")}'
+        elif node_type == "else_marker":
+            text = '---- ELSE ----'
 
         self.tree.item(node_id, text=text)
 
@@ -851,8 +889,13 @@ class DialogsTab(ttk.Frame):
         self.context_menu = tk.Menu(self, tearoff=0)
         self.context_menu.add_command(label="Add Say", command=self.add_say_node)
         self.context_menu.add_command(label="Add Option", command=self.add_option_node)
+        self.context_menu.add_command(label="Add If Block", command=self.add_if_node)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="Add Set Quest", command=self.add_set_quest_node)
+        self.context_menu.add_command(label="Add Give Item", command=self.add_give_node)
+        self.context_menu.add_command(label="Add Take Item", command=self.add_take_node)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Add Else Marker", command=self.add_else_marker_node)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="Delete Node", command=self.delete_node)
 
@@ -862,10 +905,21 @@ class DialogsTab(ttk.Frame):
         self.tree.selection_set(self.selected_node_id)
 
         node_type = self.tree.item(self.selected_node_id, 'values')[0]
-        can_have_children = node_type in ["dialog", "option"]
+        can_have_children = node_type in ["dialog", "option", "if"]
 
-        for item in ["Add Say", "Add Option", "Add Set Quest"]:
-            self.context_menu.entryconfig(item, state="normal" if can_have_children else "disabled")
+        for item in ["Add Say", "Add Option", "Add Set Quest", "Add Give Item", "Add Take Item", "Add If Block"]:
+             self.context_menu.entryconfig(item, state="normal" if can_have_children else "disabled")
+
+        # Special logic for 'Add Else Marker'
+        parent_id = self.tree.parent(self.selected_node_id)
+        parent_type = self.tree.item(parent_id, 'values')[0] if parent_id else ""
+        if node_type == 'if' or parent_type == 'if':
+            # Check if an else marker already exists
+            parent_node = self.selected_node_id if node_type == 'if' else parent_id
+            has_else = any(self.node_map[child_id].get("type") == "else_marker" for child_id in self.tree.get_children(parent_node))
+            self.context_menu.entryconfig("Add Else Marker", state="disabled" if has_else else "normal")
+        else:
+            self.context_menu.entryconfig("Add Else Marker", state="disabled")
 
         self.context_menu.entryconfig("Delete Node", state="disabled" if not self.tree.parent(self.selected_node_id) else "normal")
         self.context_menu.post(event.x_root, event.y_root)
@@ -880,6 +934,11 @@ class DialogsTab(ttk.Frame):
         if text is not None:
             self._add_node({"type": "option", "text": text, "nodes": []})
 
+    def add_if_node(self):
+        condition = simpledialog.askstring("Add If Block", "Enter the condition (e.g., player.health > 10):")
+        if condition is not None:
+            self._add_node({"type": "if", "condition": condition, "nodes": []})
+
     def add_set_quest_node(self):
         quest_ids = list(self.app.quests_tab.quests_data.keys())
         if not quest_ids:
@@ -887,9 +946,34 @@ class DialogsTab(ttk.Frame):
             return
         self._add_node({"type": "set_quest", "quest_id": quest_ids[0], "state": "active"})
 
-    def _add_node(self, node_data):
-        if not self.selected_node_id: return
-        parent_data = self.node_map.get(self.selected_node_id)
+    def add_give_node(self):
+        item_ids = list(self.app.items_tab.items_data.keys())
+        if not item_ids:
+            messagebox.showinfo("Info", "No items created. Please create an item in the Items tab first.")
+            return
+        self._add_node({"type": "give", "item_id": item_ids[0], "count": 1})
+
+    def add_take_node(self):
+        item_ids = list(self.app.items_tab.items_data.keys())
+        if not item_ids:
+            messagebox.showinfo("Info", "No items created. Please create an item in the Items tab first.")
+            return
+        self._add_node({"type": "take", "item_id": item_ids[0], "count": 1})
+
+    def add_else_marker_node(self):
+        parent_id = self.selected_node_id
+        if self.tree.item(parent_id, 'values')[0] != 'if':
+            parent_id = self.tree.parent(self.selected_node_id)
+
+        if self.tree.item(parent_id, 'values')[0] == 'if':
+            self._add_node({"type": "else_marker"}, parent_id=parent_id)
+
+    def _add_node(self, node_data, parent_id=None):
+        if parent_id is None:
+            parent_id = self.selected_node_id
+
+        if not parent_id: return
+        parent_data = self.node_map.get(parent_id)
         if parent_data is None or "nodes" not in parent_data: return
 
         parent_data["nodes"].append(node_data)
@@ -897,7 +981,7 @@ class DialogsTab(ttk.Frame):
         new_node_id = f"node_{self.node_counter}"
         self.node_map[new_node_id] = node_data
 
-        self.tree.insert(self.selected_node_id, 'end', iid=new_node_id, values=(node_data["type"],), open="nodes" in node_data)
+        self.tree.insert(parent_id, 'end', iid=new_node_id, values=(node_data["type"],), open="nodes" in node_data)
         self.refresh_node_text(new_node_id)
 
     def delete_node(self):
