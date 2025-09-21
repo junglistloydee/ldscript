@@ -5,6 +5,7 @@ import pygame
 import os
 import json
 import time
+import threading
 from copy import deepcopy
 from game_state import GameState
 from network import Server, Client
@@ -12,7 +13,7 @@ from network import Server, Client
 STATE_MODIFYING_COMMANDS = {
     'define', 'increase_stat', 'decrease_stat',
     'learn_skill', 'forget_skill', 'give_item', 'take_item',
-    'attack', 'random', 'set_quest'
+    'attack', 'random', 'set_quest', 'buy', 'sell'
 }
 
 class Interpreter:
@@ -134,6 +135,7 @@ class Interpreter:
             execution_thread = threading.Thread(target=self._execute_block, args=(self.ast,))
             execution_thread.daemon = True
             execution_thread.start()
+            return execution_thread
         except FileNotFoundError:
             print(f"Error: File not found at '{filepath}'"); sys.exit(1)
         except SyntaxError as e:
@@ -224,6 +226,15 @@ class Interpreter:
                 entity_block, end_index = self._parse_entity_block(lines, i + 1)
                 self.game_state.entities[name] = entity_block; i = end_index + 1; continue
 
+            match_item_def = re.match(r'item (\w+)', line)
+            if match_item_def:
+                name = match_item_def.group(1)
+                item_block, end_index = self._parse_item_block(lines, i + 1)
+                item_block['id'] = name
+                self.game_state.items[name] = item_block
+                i = end_index + 1
+                continue
+
             match_quest_def = re.match(r'quest (\w+) "([^"]*)"', line)
             if match_quest_def:
                 quest_id, quest_name = match_quest_def.groups()
@@ -268,6 +279,25 @@ class Interpreter:
                 count, name = match_take.groups()
                 ast.append({'type': 'take_item', 'name': name, 'count': count or "1"}); i += 1; continue
 
+            match_buy = re.match(r'buy (?:(\d+)\s+)?(\w+) from (\w+)', line)
+            if match_buy:
+                count, item_id, vendor_id = match_buy.groups()
+                ast.append({'type': 'buy', 'item_id': item_id, 'vendor_id': vendor_id, 'count': count or "1"}); i += 1; continue
+
+            match_sell = re.match(r'sell (?:(\d+)\s+)?(\w+) to (\w+)', line)
+            if match_sell:
+                count, item_id, vendor_id = match_sell.groups()
+                ast.append({'type': 'sell', 'item_id': item_id, 'vendor_id': vendor_id, 'count': count or "1"}); i += 1; continue
+
+            match_shop = re.match(r'shop (\w+)', line)
+            if match_shop:
+                vendor_id = match_shop.group(1)
+                ast.append({'type': 'shop', 'vendor_id': vendor_id}); i += 1; continue
+
+            match_inventory = re.match(r'inventory', line)
+            if match_inventory:
+                ast.append({'type': 'inventory'}); i += 1; continue
+
             match_attack = re.match(r'attack (\w+) on (\w+)(?: with (\w+))?', line)
             if match_attack:
                 attacker, target, weapon = match_attack.groups()
@@ -302,7 +332,7 @@ class Interpreter:
             if match_play_music:
                 ast.append({'type': 'play_music', 'filepath': match_play_music.group(1).strip()}); i += 1; continue
 
-            if line in ['else', 'end', 'end cutscene', 'end dialog', 'end option', 'end quest', 'end entity', 'end function', 'end event']:
+            if line in ['else', 'end', 'end cutscene', 'end dialog', 'end option', 'end quest', 'end entity', 'end function', 'end event', 'end item']:
                 raise SyntaxError(f"Unexpected '{line}' keyword.")
             raise SyntaxError(f"Unknown command: {line}")
         if end_keywords:
@@ -344,6 +374,23 @@ class Interpreter:
             else: raise SyntaxError(f"Invalid line in entity definition: {line}")
             i += 1
         raise SyntaxError("Expected 'end entity' but reached end of file.")
+
+    def _parse_item_block(self, lines, index):
+        properties = {}; i = index
+        while i < len(lines):
+            line = lines[i]
+            if line == 'end item': return properties, i
+            match_prop = re.match(r'(\w+)\s+(.*)', line)
+            if match_prop:
+                key, value = match_prop.groups()
+                # Evaluate if not a string literal
+                if not (value.startswith('"') and value.endswith('"')):
+                    properties[key] = self._evaluate_expression(value)
+                else:
+                    properties[key] = value[1:-1]
+            else: raise SyntaxError(f"Invalid property line in item definition: {line}")
+            i += 1
+        raise SyntaxError("Expected 'end item' but reached end of file.")
 
     def _parse_quest_block(self, lines, index):
         # This function remains unchanged
@@ -513,19 +560,142 @@ class Interpreter:
         return None
 
     def _execute_give_item(self, command):
-        item_name, count = command['name'], int(self._evaluate_expression(command['count']))
+        item_id, count = command['name'], int(self._evaluate_expression(command['count']))
+        if item_id not in self.game_state.items:
+            print(f"Error: Item '{item_id}' is not defined.", file=sys.stderr)
+            return None
         if count <= 0: return None
-        self.game_state.inventory[item_name] = self.game_state.inventory.get(item_name, 0) + count
+        for _ in range(count):
+            self.game_state.inventory.append(deepcopy(self.game_state.items[item_id]))
         return None
 
     def _execute_take_item(self, command):
-        item_name, count = command['name'], int(self._evaluate_expression(command['count']))
+        item_id, count = command['name'], int(self._evaluate_expression(command['count']))
         if count <= 0: return None
-        current_count = self.game_state.inventory.get(item_name, 0)
-        if current_count >= count:
-            self.game_state.inventory[item_name] = current_count - count
-            if self.game_state.inventory[item_name] == 0: del self.game_state.inventory[item_name]
-        else: print(f"Error: Not enough '{item_name}'. Have {current_count}, need {count}.", file=sys.stderr)
+
+        current_count = sum(1 for item in self.game_state.inventory if item.get('id') == item_id)
+        if current_count < count:
+            print(f"Error: Not enough '{item_id}'. Have {current_count}, need {count}.", file=sys.stderr)
+            return None
+
+        removed_count = 0
+        new_inventory = []
+        for item in self.game_state.inventory:
+            if item.get('id') == item_id and removed_count < count:
+                removed_count += 1
+            else:
+                new_inventory.append(item)
+        self.game_state.inventory = new_inventory
+        return None
+
+    def _execute_inventory(self, command):
+        print("Your inventory:")
+        if not self.game_state.inventory:
+            print("  - Empty")
+            return None
+
+        item_counts = {}
+        for item in self.game_state.inventory:
+            item_id = item.get('id', 'unknown_item')
+            item_counts[item_id] = item_counts.get(item_id, 0) + 1
+
+        for item_id, count in sorted(item_counts.items()):
+            item_def = self.game_state.items.get(item_id)
+            if item_def:
+                print(f"  - {count}x {item_def.get('name', item_id)} ({item_def.get('description', '')})")
+            else:
+                print(f"  - {count}x {item_id}")
+        return None
+
+    def _execute_shop(self, command):
+        vendor_id = command['vendor_id']
+        vendor = self.game_state.entities.get(vendor_id)
+        if not vendor:
+            print(f"Error: Vendor '{vendor_id}' not found.", file=sys.stderr)
+            return None
+
+        vendor_inventory_ids = vendor.get('inventory', "").split(',')
+        if not vendor_inventory_ids or vendor_inventory_ids == ['']:
+            print(f"{vendor.get('name', vendor_id)} has nothing for sale.")
+            return None
+
+        print(f"{vendor.get('name', vendor_id)}'s Shop:")
+        for item_id in sorted(list(set(vendor_inventory_ids))):
+            item_def = self.game_state.items.get(item_id)
+            if item_def:
+                price = item_def.get('price', 0)
+                print(f"  - {item_def.get('name', item_id)} ({price} gold) - {item_def.get('description', 'No description.')}")
+            else:
+                print(f"  - {item_id} (Unknown Item)")
+        return None
+
+    def _execute_buy(self, command):
+        item_id, count, vendor_id = command['item_id'], int(self._evaluate_expression(command['count'])), command['vendor_id']
+
+        vendor = self.game_state.entities.get(vendor_id)
+        if not vendor:
+            print(f"Error: Vendor '{vendor_id}' not found.", file=sys.stderr)
+            return None
+
+        item_def = self.game_state.items.get(item_id)
+        if not item_def:
+            print(f"Error: Item '{item_id}' is not defined.", file=sys.stderr)
+            return None
+
+        vendor_inventory = vendor.get('inventory', "").split(',')
+        if item_id not in vendor_inventory:
+            print(f"Error: {vendor.get('name', vendor_id)} does not sell '{item_id}'.", file=sys.stderr)
+            return None
+
+        price = item_def.get('price', 0)
+        total_cost = price * count
+
+        player_gold = self.game_state.variables.get('gold', 0)
+        if player_gold < total_cost:
+            print(f"Error: Not enough gold. Have {player_gold}, need {total_cost}.", file=sys.stderr)
+            return None
+
+        self.game_state.variables['gold'] = player_gold - total_cost
+        for _ in range(count):
+            self.game_state.inventory.append(deepcopy(item_def))
+
+        print(f"You bought {count}x {item_def.get('name', item_id)} for {total_cost} gold.")
+        return None
+
+    def _execute_sell(self, command):
+        item_id, count, vendor_id = command['item_id'], int(self._evaluate_expression(command['count'])), command['vendor_id']
+
+        vendor = self.game_state.entities.get(vendor_id)
+        if not vendor:
+            print(f"Error: Vendor '{vendor_id}' not found.", file=sys.stderr)
+            return None
+
+        item_def = self.game_state.items.get(item_id)
+        if not item_def:
+            print(f"Error: Item '{item_id}' is not defined.", file=sys.stderr)
+            return None
+
+        player_item_count = sum(1 for item in self.game_state.inventory if item['id'] == item_id)
+        if player_item_count < count:
+            print(f"Error: You don't have {count} of '{item_id}' to sell. You have {player_item_count}.", file=sys.stderr)
+            return None
+
+        price = item_def.get('price', 0)
+        sell_price = int(price * 0.5)
+        total_gain = sell_price * count
+
+        removed_count = 0
+        new_inventory = []
+        for item in self.game_state.inventory:
+            if item['id'] == item_id and removed_count < count:
+                removed_count += 1
+            else:
+                new_inventory.append(item)
+        self.game_state.inventory = new_inventory
+
+        self.game_state.variables['gold'] = self.game_state.variables.get('gold', 0) + total_gain
+
+        print(f"You sold {count}x {item_def.get('name', item_id)} for {total_gain} gold.")
         return None
 
     def _evaluate_expression(self, expr_str):
@@ -550,8 +720,10 @@ class Interpreter:
         if match_skill: return match_skill.group(1) in self.game_state.skills
         match_item = re.match(r'has (?:(\d+)\s+)?(\w+)', condition_str)
         if match_item:
-            count_str, item_name = match_item.groups()
-            return self.game_state.inventory.get(item_name, 0) >= (int(count_str) if count_str else 1)
+            count_str, item_id = match_item.groups()
+            required_count = int(count_str) if count_str else 1
+            current_count = sum(1 for item in self.game_state.inventory if item.get('id') == item_id)
+            return current_count >= required_count
         match_quest = re.match(r'quest (\w+) is (\w+)', condition_str)
         if match_quest:
             quest_id, state = match_quest.groups()
@@ -586,14 +758,19 @@ def main():
             else: print("Error: --connect requires an IP address."); sys.exit(1)
 
     interpreter = Interpreter(mode=mode, host=host)
-    interpreter.run_from_file(filepath)
+    execution_thread = interpreter.run_from_file(filepath)
 
-    try:
-        while True: time.sleep(1)
-    except KeyboardInterrupt:
-        print("\nShutting down.")
-    finally:
-        if interpreter.network: interpreter.network.shutdown()
+    if execution_thread and mode == 'singleplayer':
+        execution_thread.join()
+    elif execution_thread:
+        try:
+            while execution_thread.is_alive():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nShutting down.")
+        finally:
+            if interpreter.network:
+                interpreter.network.shutdown()
 
 if __name__ == "__main__":
     main()
