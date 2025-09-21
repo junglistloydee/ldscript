@@ -81,35 +81,35 @@ class LdParser:
         while i < len(lines):
             line = lines[i]
 
-            match_entity = re.match(r'entity (\w+)', line)
+            match_entity = re.match(r'entity\s+(\w+)', line)
             if match_entity:
                 name = match_entity.group(1)
                 block, i = self._parse_entity_block(lines, i + 1)
                 self.entities[name] = block
                 continue
 
-            match_item = re.match(r'item (\w+)', line)
+            match_item = re.match(r'item\s+(\w+)', line)
             if match_item:
                 name = match_item.group(1)
                 block, i = self._parse_item_block(lines, i + 1)
                 self.items[name] = block
                 continue
 
-            match_quest = re.match(r'quest (\w+) "([^"]*)"', line)
+            match_quest = re.match(r'quest\s+(\w+)\s+"([^"]*)"', line)
             if match_quest:
                 quest_id, quest_name = match_quest.groups()
                 props, i = self._parse_quest_block(lines, i + 1)
                 self.quests[quest_id] = {'id': quest_id, 'name': quest_name, **props}
                 continue
 
-            match_func = re.match(r'function (\w+)', line)
+            match_func = re.match(r'function\s+(\w+)', line)
             if match_func:
                 name = match_func.group(1)
                 block, i = self._parse_block(lines, i + 1, end_keywords=['end function'])
                 self.functions[name] = block
                 continue
 
-            match_dialog = re.match(r'dialog (\w+)', line)
+            match_dialog = re.match(r'dialog\s+(\w+)', line)
             if match_dialog:
                 name = match_dialog.group(1)
                 block, i = self._parse_dialog_block(lines, i + 1)
@@ -129,7 +129,7 @@ class LdParser:
             if line in end_keywords:
                 return ast, i + 1
 
-            match_if = re.match(r'if (.*)', line)
+            match_if = re.match(r'if\s+(.*)', line)
             if match_if:
                 condition = match_if.group(1).strip()
                 then_block, then_end_i = self._parse_block(lines, i + 1, end_keywords=['else', 'end'])
@@ -145,30 +145,30 @@ class LdParser:
                 ast.append({'type': 'if', 'condition': condition, 'then_block': then_block, 'else_block': else_block})
                 continue
 
-            match_say = re.match(r'say (.*)', line)
+            match_say = re.match(r'say\s+(.*)', line)
             if match_say:
                 ast.append({'type': 'say', 'text': match_say.group(1).strip()})
                 i += 1; continue
 
-            match_set_quest = re.match(r'set quest (\w+) to (\w+)', line)
+            match_set_quest = re.match(r'set\s+quest\s+(\w+)\s+to\s+(\w+)', line)
             if match_set_quest:
                 quest_id, state = match_set_quest.groups()
                 ast.append({'type': 'set_quest', 'quest_id': quest_id, 'state': state})
                 i += 1; continue
 
-            match_give = re.match(r'give (?:(\d+)\s+)?(\w+)', line)
+            match_give = re.match(r'give\s+(?:(\d+)\s+)?(\w+)', line)
             if match_give:
                 count, item_id = match_give.groups()
                 ast.append({'type': 'give', 'item_id': item_id, 'count': count or "1"})
                 i += 1; continue
 
-            match_take = re.match(r'take (?:(\d+)\s+)?(\w+)', line)
+            match_take = re.match(r'take\s+(?:(\d+)\s+)?(\w+)', line)
             if match_take:
                 count, item_id = match_take.groups()
                 ast.append({'type': 'take', 'item_id': item_id, 'count': count or "1"})
                 i += 1; continue
 
-            match_call = re.match(r'call (\w+)', line)
+            match_call = re.match(r'call\s+(\w+)', line)
             if match_call:
                 ast.append({'type': 'call_function', 'name': match_call.group(1)})
                 i += 1; continue
@@ -185,7 +185,7 @@ class LdParser:
         # Parse 'say' nodes
         while i < len(lines):
             line = lines[i]
-            match_say = re.match(r'say (.*)', line)
+            match_say = re.match(r'say\s+(.*)', line)
             if not match_say: break
             dialog_ast['say_nodes'].append({'type': 'say', 'text': match_say.group(1).strip()})
             i += 1
@@ -194,7 +194,7 @@ class LdParser:
         while i < len(lines):
             line = lines[i]
             if line == 'end dialog': return dialog_ast, i + 1
-            match_option = re.match(r'option ("[^"]*")', line)
+            match_option = re.match(r'option\s+("[^"]*")', line)
             if not match_option: raise SyntaxError(f"Expected 'option' or 'end dialog', got: {line}")
 
             option_text = match_option.group(1)[1:-1]
@@ -257,7 +257,7 @@ class LdParser:
         while i < len(lines):
             line = lines[i]
             if line == 'end entity': return stats, i + 1
-            match_stat = re.match(r'stat (\w+) (.*)', line)
+            match_stat = re.match(r'stat\s+(\w+)\s+(.*)', line)
             if match_stat:
                 name, value = match_stat.groups()
                 stats[name] = self._evaluate_expression(value)
