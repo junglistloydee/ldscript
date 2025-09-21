@@ -122,12 +122,20 @@ class Interpreter:
         else:
             return data
 
+    def _clean_lines(self, file_content_lines):
+        cleaned_lines = []
+        for line in file_content_lines:
+            code = line.split('#')[0].strip()
+            if code:
+                cleaned_lines.append(code)
+        return cleaned_lines
+
     def run_from_file(self, filepath):
         try:
             abs_filepath = os.path.abspath(filepath)
             initial_dir = os.path.dirname(abs_filepath)
             with open(abs_filepath, 'r') as f:
-                lines = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+                lines = self._clean_lines(f)
             processed_lines = self._preprocess_imports(lines, initial_dir, set([abs_filepath]))
             self.ast, _ = self._parse(processed_lines)
             if self.mode == 'client':
@@ -153,7 +161,7 @@ class Interpreter:
                 processed_files.add(import_path)
                 try:
                     with open(import_path, 'r') as f:
-                        imported_content = [l.strip() for l in f if l.strip() and not l.strip().startswith('#')]
+                        imported_content = self._clean_lines(f)
                     new_dir = os.path.dirname(import_path)
                     final_lines.extend(self._preprocess_imports(imported_content, new_dir, processed_files))
                 except FileNotFoundError:
@@ -204,6 +212,13 @@ class Interpreter:
             if match_call:
                 ast.append({'type': 'call_function', 'name': match_call.group(1)}); i += 1; continue
 
+            match_option = re.match(r'option ("[^"]*")', line)
+            if match_option:
+                option_text = match_option.group(1)[1:-1]
+                option_block, end_index = self._parse(lines, i + 1, end_keywords=['end option'])
+                ast.append({'type': 'option', 'text': option_text, 'block': option_block}); i = end_index + 1
+                continue
+
             match_on_event = re.match(r'on (\w+)', line)
             if match_on_event:
                 name = match_on_event.group(1)
@@ -213,7 +228,7 @@ class Interpreter:
             match_dialog_def = re.match(r'dialog (\w+)', line)
             if match_dialog_def:
                 name = match_dialog_def.group(1)
-                dialog_block, end_index = self._parse_dialog_block(lines, i + 1)
+                dialog_block, end_index = self._parse(lines, i + 1, end_keywords=['end dialog'])
                 self.dialogs[name] = dialog_block; i = end_index + 1; continue
 
             match_start_dialog = re.match(r'start dialog (\w+)', line)
@@ -298,7 +313,7 @@ class Interpreter:
             if match_inventory:
                 ast.append({'type': 'inventory'}); i += 1; continue
 
-            match_attack = re.match(r'attack (\w+) on (\w+)(?: with (\w+))?', line)
+            match_attack = re.match(r'attack ([\w{}.-]+) on ([\w{}.-]+)(?: with ([\w{}.-]+))?', line)
             if match_attack:
                 attacker, target, weapon = match_attack.groups()
                 ast.append({'type': 'attack', 'attacker': attacker, 'target': target, 'weapon': weapon}); i += 1; continue
@@ -338,28 +353,6 @@ class Interpreter:
         if end_keywords:
             raise SyntaxError(f"Expected one of '{end_keywords}' but reached end of file.")
         return ast, i
-
-    def _parse_dialog_block(self, lines, index):
-        # This function remains unchanged
-        say_nodes = []
-        options = []
-        i = index
-        while i < len(lines):
-            line = lines[i]
-            if line == 'end dialog': return {'say_nodes': say_nodes, 'options': options}, i
-            match_say = re.match(r'say (.*)', line)
-            if match_say:
-                say_nodes.append({'type': 'say', 'value': match_say.group(1).strip()}); i += 1
-            else: break
-        while i < len(lines):
-            line = lines[i]
-            if line == 'end dialog': return {'say_nodes': say_nodes, 'options': options}, i
-            match_option = re.match(r'option ("[^"]*")', line)
-            if not match_option: raise SyntaxError(f"Expected 'option' or 'end dialog', but got: {line}")
-            option_text = match_option.group(1)[1:-1]
-            option_block, end_index = self._parse(lines, i + 1, end_keywords=['end option'])
-            options.append({'text': option_text, 'block': option_block}); i = end_index + 1
-        raise SyntaxError("Expected 'end dialog' but reached end of file.")
 
     def _parse_entity_block(self, lines, index):
         # This function remains unchanged
@@ -504,20 +497,48 @@ class Interpreter:
         return None
 
     def _execute_start_dialog(self, command):
-        if self.mode == 'client': print("Dialogs are currently disabled for clients."); return None
+        if self.mode == 'client':
+            print("Dialogs are currently disabled for clients.")
+            return None
+
         name = command['name']
-        if name not in self.dialogs: print(f"Error: Dialog '{name}' not defined.", file=sys.stderr); return None
-        dialog = self.dialogs[name]
-        for say_command in dialog['say_nodes']: self._execute_command(say_command)
-        if not dialog['options']: return None
+        if name not in self.dialogs:
+            print(f"Error: Dialog '{name}' not defined.", file=sys.stderr)
+            return None
+
+        dialog_ast = self.dialogs[name]
+
+        pre_option_commands = []
+        options = []
+        found_options = False
+        for cmd in dialog_ast:
+            if cmd['type'] == 'option':
+                found_options = True
+                options.append(cmd)
+            elif not found_options:
+                pre_option_commands.append(cmd)
+            else:
+                print(f"Warning: Command '{cmd['type']}' found after options in dialog '{name}'. It will be ignored.", file=sys.stderr)
+
+        self._execute_block(pre_option_commands)
+
+        if not options:
+            return None
+
         print("\nChoose an option:")
-        for i, option in enumerate(dialog['options']): print(f"  {i + 1}: {option['text']}")
+        for i, option in enumerate(options):
+            print(f"  {i + 1}: {option['text']}")
+
         while True:
             try:
                 choice_index = int(input("> ")) - 1
-                if 0 <= choice_index < len(dialog['options']): return self._execute_block(dialog['options'][choice_index]['block'])
-                else: print("Invalid choice.")
-            except (ValueError, EOFError, KeyboardInterrupt): print("\nDialog cancelled."); return None
+                if 0 <= choice_index < len(options):
+                    return self._execute_block(options[choice_index]['block'])
+                else:
+                    print("Invalid choice.")
+            except (ValueError, EOFError, KeyboardInterrupt):
+                print("\nDialog cancelled.")
+                return None
 
     def _execute_if(self, command):
         if self._evaluate_condition(command['condition']): return self._execute_block(command['then_block'])
