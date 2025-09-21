@@ -306,6 +306,12 @@ Here are some examples that tie all the features together:
 
 #### `main.ld`
 ```ldscript
+# ================================================================= #
+# Welcome to the complete LDScript Adventure!                       #
+# This single file contains all the game's logic, definitions,      #
+# and dialogs, ready to be run by the interpreter.                  #
+# ================================================================= #
+
 # --- ITEM DEFINITIONS ---
 # Defines items with their properties.
 item potion
@@ -450,10 +456,9 @@ dialog blacksmith_talk
     end option
 end dialog
 
-# Main game script that ties everything together.
-# Use 'import' to include definitions from other files.
-import "definitions.ld"
-import "dialogs.ld"
+# ================================================================= #
+# --- SCRIPT EXECUTION STARTS HERE ---                              #
+# ================================================================= #
 
 # --- GAME SETUP ---
 # Use 'define' to create a variable.
