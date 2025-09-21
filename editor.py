@@ -5,6 +5,7 @@ import subprocess
 import threading
 import queue
 import os
+import sys
 from tkinter import scrolledtext
 from ld_parser import LdParser
 
@@ -305,7 +306,7 @@ class App(tk.Tk):
         self.after(100, self._check_queue, text_area, output_queue)
 
     def _run_process_in_thread(self, filepath, output_queue):
-        command = ["python", "ldscript_interpreter.py", filepath]
+        command = [sys.executable, "ldscript_interpreter.py", filepath]
         try:
             process = subprocess.Popen(
                 command,
