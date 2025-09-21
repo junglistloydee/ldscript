@@ -94,6 +94,37 @@ end dialog
 start dialog merchant_greet
 ```
 
+## Visual Editor
+
+A "no-code" visual editor is provided to allow for easy creation and management of `ldscript` game files. The editor provides a graphical interface for all major language features.
+
+### Running the Editor
+
+To run the editor, you need Python 3 installed. Execute the following command in your terminal:
+
+```bash
+python editor.py
+```
+
+This will launch the GUI application.
+
+### Basic Functionality
+
+The editor is organized into several tabs:
+
+*   **Entities, Items, and Quests Tabs:** These tabs allow you to add, delete, and edit the properties of your game's entities, items, and quests in simple forms.
+*   **Dialogs & Logic Tab:** This is the core of the editor.
+    *   Click "Add Dialog" to create a new conversation tree.
+    *   Right-click on a dialog or an option node in the tree to add new commands like `say`, `option`, or `set quest`.
+    *   Click on any node in the tree to edit its properties (e.g., the text of a `say` command) in the panel on the right.
+*   **File Menu:**
+    *   **New Project:** Clears the entire editor to start a new project from scratch.
+    *   **Save Project:** Saves the current state of all tabs into a single `.json` project file. This allows you to close the editor and resume your work later.
+    *   **Open Project:** Loads a previously saved `.json` project file.
+*   **Game Menu:**
+    *   **Generate main.ld File:** This will take all the data from the tabs and generate a complete, properly formatted `.ld` script file, which you can save.
+    *   **Run Game:** This will first generate the `.ld` script and then immediately run it using the `ldscript_interpreter.py`, displaying the game's output in a new console window for quick testing.
+
 ### Quest Management
 Define and track quests. Quests have an ID, a name, and properties like `description` and `state`.
 ```ldscript
