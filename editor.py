@@ -310,6 +310,11 @@ class App(tk.Tk):
     def _run_process_in_thread(self, filepath, output_queue):
         command = [sys.executable, "ldscript_interpreter.py", filepath]
         try:
+            # Set up the environment for the subprocess
+            env = os.environ.copy()
+            python_path = env.get('PYTHONPATH', '')
+            env['PYTHONPATH'] = f"{APP_ROOT}{os.pathsep}{python_path}"
+
             process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
@@ -317,7 +322,8 @@ class App(tk.Tk):
                 text=True,
                 bufsize=1,
                 universal_newlines=True,
-                cwd=APP_ROOT
+                cwd=APP_ROOT,
+                env=env
             )
             for line in process.stdout:
                 output_queue.put(line)
