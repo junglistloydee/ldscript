@@ -9,6 +9,8 @@ import sys
 from tkinter import scrolledtext
 from ld_parser import LdParser
 
+APP_ROOT = os.path.dirname(os.path.realpath(__file__))
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -314,7 +316,8 @@ class App(tk.Tk):
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                universal_newlines=True
+                universal_newlines=True,
+                cwd=APP_ROOT
             )
             for line in process.stdout:
                 output_queue.put(line)
