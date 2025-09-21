@@ -85,7 +85,7 @@ class LdParser:
             if match_entity:
                 name = match_entity.group(1)
                 block, i = self._parse_entity_block(lines, i + 1)
-                self.entities[name] = block
+                self.entities[name] = {"stats": block}
                 continue
 
             match_item = re.match(r'item\s+(\w+)', line)
