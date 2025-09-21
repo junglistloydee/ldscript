@@ -269,7 +269,8 @@ class App(tk.Tk):
             messagebox.showerror("Error", "There is no game logic to run.")
             return
 
-        temp_filepath = "temp_main.ld"
+        # Use an absolute path for the temporary file to avoid ambiguity
+        temp_filepath = os.path.join(APP_ROOT, "temp_main.ld")
         with open(temp_filepath, "w") as f:
             f.write(script_code)
 
@@ -308,7 +309,8 @@ class App(tk.Tk):
         self.after(100, self._check_queue, text_area, output_queue)
 
     def _run_process_in_thread(self, filepath, output_queue):
-        command = [sys.executable, "ldscript_interpreter.py", filepath]
+        interpreter_script_path = os.path.join(APP_ROOT, "ldscript_interpreter.py")
+        command = [sys.executable, interpreter_script_path, filepath]
         try:
             # Set up the environment for the subprocess
             env = os.environ.copy()
