@@ -38,7 +38,7 @@ class LdParser:
             converted_dialogs = {
                 dialog_id: {
                     "type": "dialog", "id": dialog_id,
-                    "nodes": self._convert_dialog_block_to_nodes(dialog_block)
+                    "nodes": self._convert_ast_to_nodes(dialog_block)
                 } for dialog_id, dialog_block in self.dialogs.items()
             }
 
@@ -179,28 +179,70 @@ class LdParser:
         raise SyntaxError(f"Expected one of '{end_keywords}' but reached end of file.")
 
     def _parse_dialog_block(self, lines, index):
-        """ Dialogs have a specific structure: `say`s, then `option`s. """
-        dialog_ast = {'say_nodes': [], 'options': []}
+        """
+        Parses a dialog block, which can contain any regular command plus 'option' blocks.
+        """
+        ast = []
         i = index
-        # Parse 'say' nodes
         while i < len(lines):
             line = lines[i]
+            if line == 'end dialog':
+                return ast, i + 1
+
+            # --- Standard commands from _parse_block ---
+            match_if = re.match(r'if\s+(.*)', line)
+            if match_if:
+                condition = match_if.group(1).strip()
+                then_block, then_end_i = self._parse_block(lines, i + 1, end_keywords=['else', 'end'])
+                else_block = []
+                if lines[then_end_i - 1] == 'else':
+                    else_block, else_end_i = self._parse_block(lines, then_end_i, end_keywords=['end'])
+                    i = else_end_i
+                else:
+                    i = then_end_i
+                ast.append({'type': 'if', 'condition': condition, 'then_block': then_block, 'else_block': else_block})
+                continue
+
             match_say = re.match(r'say\s+(.*)', line)
-            if not match_say: break
-            dialog_ast['say_nodes'].append({'type': 'say', 'text': match_say.group(1).strip()})
-            i += 1
+            if match_say:
+                ast.append({'type': 'say', 'text': match_say.group(1).strip()})
+                i += 1; continue
 
-        # Parse 'option' nodes
-        while i < len(lines):
-            line = lines[i]
-            if line == 'end dialog': return dialog_ast, i + 1
+            match_set_quest = re.match(r'set\s+quest\s+(\w+)\s+to\s+(\w+)', line)
+            if match_set_quest:
+                quest_id, state = match_set_quest.groups()
+                ast.append({'type': 'set_quest', 'quest_id': quest_id, 'state': state})
+                i += 1; continue
+
+            match_give = re.match(r'give\s+(?:(\d+)\s+)?(\w+)', line)
+            if match_give:
+                count, item_id = match_give.groups()
+                ast.append({'type': 'give', 'item_id': item_id, 'count': count or "1"})
+                i += 1; continue
+
+            match_take = re.match(r'take\s+(?:(\d+)\s+)?(\w+)', line)
+            if match_take:
+                count, item_id = match_take.groups()
+                ast.append({'type': 'take', 'item_id': item_id, 'count': count or "1"})
+                i += 1; continue
+
+            match_call = re.match(r'call\s+(\w+)', line)
+            if match_call:
+                ast.append({'type': 'call_function', 'name': match_call.group(1)})
+                i += 1; continue
+
+            # --- Dialog-specific command ---
             match_option = re.match(r'option\s+("[^"]*")', line)
-            if not match_option: raise SyntaxError(f"Expected 'option' or 'end dialog', got: {line}")
+            if match_option:
+                option_text = match_option.group(1)[1:-1]
+                # The inside of an option is a standard block
+                option_block, end_i = self._parse_block(lines, i + 1, end_keywords=['end option'])
+                ast.append({'type': 'option', 'text': option_text, 'block': option_block})
+                i = end_i
+                continue
 
-            option_text = match_option.group(1)[1:-1]
-            option_block, end_i = self._parse_block(lines, i + 1, end_keywords=['end option'])
-            dialog_ast['options'].append({'text': option_text, 'block': option_block})
-            i = end_i
+            # If no command is matched, it's a syntax error
+            raise SyntaxError(f"Invalid command in dialog block: {line}")
 
         raise SyntaxError("Expected 'end dialog' but reached end of file.")
 
@@ -223,6 +265,10 @@ class LdParser:
                 del new_node['then_block']
                 del new_node['else_block']
 
+            elif node_type == 'option':
+                new_node['nodes'] = self._convert_ast_to_nodes(command.get('block', []))
+                del new_node['block']
+
             # Strip quotes from 'say' text
             elif node_type == 'say':
                 text = new_node.get('text', "")
@@ -232,24 +278,6 @@ class LdParser:
             nodes.append(new_node)
         return nodes
 
-    def _convert_dialog_block_to_nodes(self, dialog_block):
-        """ Converts a dialog's unique AST into the editor's node list. """
-        nodes = []
-        # Add 'say' nodes first
-        for say_node in dialog_block.get('say_nodes', []):
-            text = say_node.get('text', "")
-            if text.startswith('"') and text.endswith('"'):
-                text = text[1:-1]
-            nodes.append({'type': 'say', 'text': text})
-
-        # Then add 'option' nodes
-        for option_node in dialog_block.get('options', []):
-            nodes.append({
-                'type': 'option',
-                'text': option_node.get('text', ''),
-                'nodes': self._convert_ast_to_nodes(option_node.get('block', []))
-            })
-        return nodes
 
     def _parse_entity_block(self, lines, index):
         stats = {}
