@@ -6,6 +6,7 @@ import threading
 import queue
 import os
 from tkinter import scrolledtext
+from ld_parser import LdParser
 
 class App(tk.Tk):
     def __init__(self):
@@ -23,6 +24,7 @@ class App(tk.Tk):
         self.file_menu.add_separator()
         self.file_menu.add_command(label="Open Project", command=self.open_project)
         self.file_menu.add_command(label="Save Project", command=self.save_project)
+        self.file_menu.add_command(label="Import .ld File", command=self.import_ld_file)
         self.file_menu.add_separator()
         self.file_menu.add_command(label="Exit", command=self.quit)
         self.menu_bar.add_cascade(label="File", menu=self.file_menu)
@@ -116,6 +118,44 @@ class App(tk.Tk):
                 messagebox.showerror("Error", f"Could not serialize project data: {e}")
             except IOError as e:
                 messagebox.showerror("Error", f"Could not save project file: {e}")
+
+    def import_ld_file(self):
+        if not messagebox.askyesno("Confirm Import", "Importing a .ld file will overwrite the current project.\nAre you sure you want to continue?"):
+            return
+
+        filepath = filedialog.askopenfilename(
+            filetypes=[("LDScript Files", "*.ld"), ("All Files", "*.*")],
+            title="Import .ld File"
+        )
+        if not filepath:
+            return
+
+        try:
+            parser = LdParser()
+            project_data = parser.parse(filepath)
+
+            # Clear existing data
+            self.entities_tab.clear_data()
+            self.items_tab.clear_data()
+            self.quests_tab.clear_data()
+            self.functions_tab.clear_data()
+            self.dialogs_tab.clear_data()
+
+            # Load new data
+            self.entities_tab.load_data(project_data.get("entities", {}))
+            self.items_tab.load_data(project_data.get("items", {}))
+            self.quests_tab.load_data(project_data.get("quests", {}))
+
+            # For functions and dialogs, the node counter will be rebuilt during the load
+            self.functions_tab.load_data(project_data.get("functions", {}), 0)
+            self.dialogs_tab.load_data(project_data.get("dialogs", {}), 0)
+
+            messagebox.showinfo("Success", "Successfully imported .ld file.")
+
+        except (SyntaxError, FileNotFoundError) as e:
+            messagebox.showerror("Import Error", f"Failed to import file:\n{e}")
+        except Exception as e:
+            messagebox.showerror("Import Error", f"An unexpected error occurred: {e}")
 
     def generate_code(self):
         final_code = self._get_generated_code()
