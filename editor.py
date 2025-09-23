@@ -31,6 +31,8 @@ class DataCategory(Enum):
     QUESTS = "quests"
     FUNCTIONS = "functions"
     DIALOGS = "dialogs"
+    STRING_LISTS = "string_lists"
+    DICTIONARIES = "dictionaries"
 
 @dataclass
 class Entity:
@@ -38,9 +40,7 @@ class Entity:
 
 @dataclass
 class Item:
-    name: str = "New Item"
-    description: str = ""
-    price: int = 0
+    properties: Dict[str, Any] = field(default_factory=lambda: {"name": "New Item", "description": "", "price": 0})
 
 @dataclass
 class Quest:
@@ -68,6 +68,8 @@ class ProjectModel:
         self.entities: Dict[str, Entity] = {}
         self.items: Dict[str, Item] = {}
         self.quests: Dict[str, Quest] = {}
+        self.string_lists: Dict[str, List[str]] = {}
+        self.dictionaries: Dict[str, Dict[str, str]] = {}
         self.functions: Dict[str, Any] = {}
         self.dialogs: Dict[str, Any] = {}
         self.dialogs_node_counter: int = 0
@@ -108,6 +110,8 @@ class ProjectModel:
         self.entities = {k: Entity(**v) for k, v in project_data.get("entities", {}).items()}
         self.items = {k: Item(**v) for k, v in project_data.get("items", {}).items()}
         self.quests = {k: Quest(**v) for k, v in project_data.get("quests", {}).items()}
+        self.string_lists = project_data.get("string_lists", {})
+        self.dictionaries = project_data.get("dictionaries", {})
         
         self.functions = project_data.get("functions", {})
         self.dialogs = project_data.get("dialogs", {})
@@ -130,6 +134,8 @@ class ProjectModel:
             "entities": {k: asdict(v) for k, v in self.entities.items()},
             "items": {k: asdict(v) for k, v in self.items.items()},
             "quests": {k: asdict(v) for k, v in self.quests.items()},
+            "string_lists": self.string_lists,
+            "dictionaries": self.dictionaries,
             "functions": self.functions,
             "dialogs": self.dialogs,
             "dialogs_node_counter": self.dialogs_node_counter,
@@ -325,6 +331,8 @@ class LdCodeGenerator:
     def generate(self) -> str:
         """Generates the full LDScript code."""
         code = [
+            self._generate_string_lists(),
+            self._generate_dictionaries(),
             self._generate_items(),
             self._generate_quests(),
             self._generate_entities(),
@@ -333,14 +341,46 @@ class LdCodeGenerator:
         ]
         return "\n".join(filter(None, code))
 
+    def _generate_string_lists(self) -> str:
+        lines = ["# --- String List Definitions ---"]
+        if not self.model.string_lists: return ""
+        for list_id, str_list in self.model.string_lists.items():
+            lines.append(f"string_list {list_id}")
+            for item in str_list:
+                lines.append(f"    \"{item}\"")
+            lines.append("end string_list\n")
+        return "\n".join(lines)
+
+    def _generate_dictionaries(self) -> str:
+        lines = ["# --- Dictionary Definitions ---"]
+        if not self.model.dictionaries: return ""
+        for dict_id, a_dict in self.model.dictionaries.items():
+            lines.append(f"dictionary {dict_id}")
+            for key, value in a_dict.items():
+                val_str = f"\"{value}\"" if isinstance(value, str) and not value.isnumeric() else value
+                lines.append(f"    {key} {val_str}")
+            lines.append("end dictionary\n")
+        return "\n".join(lines)
+
+    def _generate_properties_recursive(self, properties: Dict[str, Any], indent_level: int) -> List[str]:
+        lines = []
+        indent = "    " * indent_level
+        for key, value in properties.items():
+            if isinstance(value, dict):
+                lines.append(f"{indent}{key}")
+                lines.extend(self._generate_properties_recursive(value, indent_level + 1))
+                lines.append(f"{indent}end {key}")
+            else:
+                val_str = f"\"{value}\"" if isinstance(value, str) and not str(value).isnumeric() else value
+                lines.append(f"{indent}{key} {val_str}")
+        return lines
+
     def _generate_items(self) -> str:
         lines = ["# --- Item Definitions ---"]
         if not self.model.items: return ""
         for item_id, item_obj in self.model.items.items():
             lines.append(f"item {item_id}")
-            lines.append(f"    name \"{item_obj.name}\"")
-            lines.append(f"    description \"{item_obj.description}\"")
-            lines.append(f"    price {item_obj.price}")
+            lines.extend(self._generate_properties_recursive(item_obj.properties, 1))
             lines.append("end item\n")
         return "\n".join(lines)
 
@@ -676,38 +716,38 @@ class EntitiesTab(BaseDataTab):
 class ItemsTab(BaseDataTab):
     def __init__(self, parent: ttk.Notebook, model: ProjectModel):
         super().__init__(parent, model, item_name="Item", category=DataCategory.ITEMS)
-    
+        self._new_prop_counter = 0
+
     def _setup_details_frame(self):
         form_frame = ttk.Frame(self.details_frame)
         form_frame.pack(fill='x', padx=5, pady=5)
-        vcmd = (self.register(self._validate_numeric), '%P')
         self.item_id_var = tk.StringVar()
-        self.item_name_var = tk.StringVar()
-        self.item_desc_var = tk.StringVar()
-        self.item_price_var = tk.StringVar()
         self.id_entry = self._create_form_row(form_frame, "ID:", self.item_id_var)
         self.id_entry.bind("<FocusOut>", lambda e: self.handle_id_change(self.item_id_var))
-        self._create_form_row(form_frame, "Name:", self.item_name_var)
-        self._create_form_row(form_frame, "Description:", self.item_desc_var)
-        self._create_form_row(form_frame, "Price:", self.item_price_var, validate_cmd=vcmd)
-        for var in [self.item_name_var, self.item_desc_var, self.item_price_var]:
-            var.trace_add("write", self.update_item_details)
 
-    def _validate_numeric(self, value_if_allowed: str) -> bool:
-        return value_if_allowed == "" or value_if_allowed.isdigit()
+        ttk.Label(self.details_frame, text="Properties").pack(pady=5)
+        tree_frame = ttk.Frame(self.details_frame)
+        tree_frame.pack(expand=True, fill='both', padx=5, pady=5)
 
-    def _create_form_row(self, parent, label_text, string_var, validate_cmd=None):
+        self.tree = ttk.Treeview(tree_frame, columns=('Property', 'Value'), show='headings')
+        self.tree.heading('Property', text='Property')
+        self.tree.heading('Value', text='Value')
+        self.tree.pack(expand=True, fill='both')
+        self.tree.bind("<Double-1>", self.on_tree_double_click)
+
+        button_frame = ttk.Frame(self.details_frame)
+        button_frame.pack(fill='x', padx=5, pady=5)
+        ttk.Button(button_frame, text="Add Property", command=self.add_property).pack(side='left', fill='x', expand=True, padx=2)
+        ttk.Button(button_frame, text="Remove Property", command=self.remove_property).pack(side='left', fill='x', expand=True, padx=2)
+
+    def _create_form_row(self, parent, label_text, string_var):
         row = ttk.Frame(parent)
         row.pack(fill='x', pady=2)
         ttk.Label(row, text=label_text, width=12, anchor='w').pack(side='left')
-        entry_config = {"textvariable": string_var}
-        if validate_cmd:
-            entry_config["validate"] = "key"
-            entry_config["validatecommand"] = validate_cmd
-        entry = ttk.Entry(row, **entry_config)
+        entry = ttk.Entry(row, textvariable=string_var)
         entry.pack(side='left', expand=True, fill='x')
         return entry
-        
+
     def _get_new_item_data_obj(self) -> Item:
         return Item()
 
@@ -715,46 +755,95 @@ class ItemsTab(BaseDataTab):
         self.id_entry.focus_set()
         self.id_entry.selection_range(0, tk.END)
 
-    def _manage_trace(self, action: str):
-        for var in [self.item_name_var, self.item_desc_var, self.item_price_var]:
-            try:
-                # Find the correct trace name to delete
-                trace_info = var.trace_info()
-                if trace_info:
-                    if action == 'add':
-                        var.trace_add("write", self.update_item_details)
-                    elif action == 'remove':
-                        var.trace_vdelete("w", trace_info[0][1])
-            except (IndexError, tk.TclError):
-                pass 
-            
     def update_details_form(self):
-        if not self.selected_id or self.selected_id not in self.model.items: return
-        self._manage_trace('remove')
-        item_obj = self.model.items[self.selected_id]
+        if not self.selected_id: return
         self.item_id_var.set(self.selected_id)
-        self.item_name_var.set(item_obj.name)
-        self.item_desc_var.set(item_obj.description)
-        self.item_price_var.set(str(item_obj.price))
-        self._manage_trace('add')
-
-    def update_item_details(self, *args):
-        if not self.selected_id or self.selected_id not in self.model.items: return
-        price = self.item_price_var.get()
-        new_data_obj = Item(
-            name=self.item_name_var.get(),
-            description=self.item_desc_var.get(),
-            price=int(price) if price.isdigit() else 0
-        )
-        self.model.update_data_item_details(self.category, self.selected_id, new_data_obj)
         
+        selected_iid = self.tree.focus()
+        self.tree.delete(*self.tree.get_children())
+        item_obj = self.model.items.get(self.selected_id)
+        if item_obj:
+            for key, value in sorted(item_obj.properties.items()):
+                self.tree.insert('', tk.END, iid=key, values=(key, value))
+
+        if self.tree.exists(selected_iid):
+            self.tree.focus(selected_iid)
+            self.tree.selection_set(selected_iid)
+
     def clear_details_form(self):
         self.selected_id = None
-        self._manage_trace('remove')
         self.item_id_var.set("")
-        self.item_name_var.set("")
-        self.item_desc_var.set("")
-        self.item_price_var.set("")
+        self.tree.delete(*self.tree.get_children())
+
+    def add_property(self):
+        if not self.selected_id: return
+        self._new_prop_counter += 1
+        temp_key = f"new_property_{self._new_prop_counter}"
+        while temp_key in self.model.items[self.selected_id].properties:
+            self._new_prop_counter += 1
+            temp_key = f"new_property_{self._new_prop_counter}"
+
+        self.model.items[self.selected_id].properties[temp_key] = " "
+        self.model._mark_dirty()
+        self.update_details_form()
+        self.after(50, self._trigger_edit_on_new, temp_key)
+
+    def _trigger_edit_on_new(self, key: str):
+        if self.tree.exists(key):
+            self.tree.see(key)
+            self.tree.focus(key)
+            self.tree.selection_set(key)
+            self._edit_cell(key, 0)
+
+    def remove_property(self):
+        if not self.selected_id or not self.tree.selection(): return
+        selected_item = self.tree.selection()[0]
+        key_to_remove = self.tree.item(selected_item, 'values')[0]
+        if messagebox.askyesno("Confirm", f"Remove the property '{key_to_remove}'?"):
+            del self.model.items[self.selected_id].properties[key_to_remove]
+            self.model._mark_dirty()
+            self.update_details_form()
+
+    def on_tree_double_click(self, event):
+        if self.tree.identify_region(event.x, event.y) != "cell": return
+        column_id = self.tree.identify_column(event.x)
+        column_index = int(column_id.replace('#', '')) - 1
+        selected_iid = self.tree.focus()
+        self._edit_cell(selected_iid, column_index)
+
+    def _edit_cell(self, item_id: str, column_index: int):
+        if not item_id: return
+        x, y, width, height = self.tree.bbox(item_id, f"#{column_index + 1}")
+        val = self.tree.item(item_id, "values")[column_index]
+        entry_var = tk.StringVar(value=val)
+        entry = ttk.Entry(self.tree, textvariable=entry_var)
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.focus_set()
+        entry.selection_range(0, tk.END)
+
+        def on_focus_out(event):
+            new_value = entry_var.get()
+            entry.destroy()
+            current_values = list(self.tree.item(item_id, "values"))
+            old_key = current_values[0]
+
+            item_properties = self.model.items[self.selected_id].properties
+
+            if column_index == 0: # Key changed
+                if new_value != old_key:
+                    if new_value in item_properties:
+                        messagebox.showerror("Error", f"Property '{new_value}' already exists.")
+                        return
+                    item_properties[new_value] = current_values[1]
+                    del item_properties[old_key]
+            else: # Value changed
+                item_properties[old_key] = new_value
+
+            self.model._mark_dirty()
+            self.update_details_form()
+
+        entry.bind("<FocusOut>", on_focus_out)
+        entry.bind("<Return>", on_focus_out)
 
 
 class QuestsTab(BaseDataTab):
@@ -1132,6 +1221,212 @@ class DialogsTab(BaseLogicTab):
         super().__init__(parent, model, root_name="Dialog", category=DataCategory.DIALOGS)
         self.allowed_node_types.append("option")
 
+
+class StringListsTab(BaseDataTab):
+    def __init__(self, parent: ttk.Notebook, model: ProjectModel):
+        super().__init__(parent, model, item_name="String List", category=DataCategory.STRING_LISTS)
+
+    def _setup_details_frame(self):
+        form_frame = ttk.Frame(self.details_frame)
+        form_frame.pack(fill='x', padx=5, pady=5)
+        self.list_id_var = tk.StringVar()
+        self.id_entry = self._create_form_row(form_frame, "ID:", self.list_id_var)
+        self.id_entry.bind("<FocusOut>", lambda e: self.handle_id_change(self.list_id_var))
+
+        ttk.Label(self.details_frame, text="Values (one per line)").pack(pady=5)
+        self.text_widget = scrolledtext.ScrolledText(self.details_frame, wrap=tk.WORD, height=10)
+        self.text_widget.pack(expand=True, fill='both', padx=5, pady=5)
+        self.text_widget.bind("<<Modified>>", self.on_text_modified)
+
+    def _create_form_row(self, parent, label_text, string_var):
+        row = ttk.Frame(parent)
+        row.pack(fill='x', pady=2)
+        ttk.Label(row, text=label_text, width=12, anchor='w').pack(side='left')
+        entry = ttk.Entry(row, textvariable=string_var)
+        entry.pack(side='left', expand=True, fill='x')
+        return entry
+
+    def _get_new_item_data_obj(self):
+        return []
+
+    def _focus_on_main_field(self):
+        self.id_entry.focus_set()
+        self.id_entry.selection_range(0, tk.END)
+
+    def update_details_form(self):
+        if not self.selected_id or self.selected_id not in self.model.string_lists:
+            self.clear_details_form()
+            return
+
+        self.list_id_var.set(self.selected_id)
+        list_data = self.model.string_lists[self.selected_id]
+
+        # Temporarily disable the modified event to prevent feedback loop
+        self.text_widget.unbind("<<Modified>>")
+        self.text_widget.delete('1.0', tk.END)
+        self.text_widget.insert('1.0', "\n".join(list_data))
+        self.text_widget.edit_modified(False) # Reset modified flag
+        self.text_widget.bind("<<Modified>>", self.on_text_modified)
+
+    def clear_details_form(self):
+        self.selected_id = None
+        self.list_id_var.set("")
+        self.text_widget.unbind("<<Modified>>")
+        self.text_widget.delete('1.0', tk.END)
+        self.text_widget.edit_modified(False)
+        self.text_widget.bind("<<Modified>>", self.on_text_modified)
+
+    def on_text_modified(self, event):
+        if not self.selected_id: return
+
+        content = self.text_widget.get('1.0', tk.END).strip()
+        new_list_data = [line for line in content.split("\n") if line.strip()]
+
+        # Directly update the model without using the generic update method
+        self.model.string_lists[self.selected_id] = new_list_data
+        self.model._mark_dirty()
+
+        # Reset the modified flag to allow future events
+        self.text_widget.edit_modified(False)
+
+
+class DictionariesTab(BaseDataTab):
+    def __init__(self, parent: ttk.Notebook, model: ProjectModel):
+        super().__init__(parent, model, item_name="Dictionary", category=DataCategory.DICTIONARIES)
+        self._new_key_counter = 0
+
+    def update_view(self, update_type: str):
+        if update_type in [f"{self.category.value}_update", "full_update"]:
+            self.refresh_listbox()
+            if self.selected_id:
+                self.update_details_form()
+
+    def _setup_details_frame(self):
+        form_frame = ttk.Frame(self.details_frame)
+        form_frame.pack(fill='x', padx=5, pady=5)
+        self.dict_id_var = tk.StringVar()
+        self.id_entry = self._create_form_row(form_frame, "ID:", self.dict_id_var)
+        self.id_entry.bind("<FocusOut>", lambda e: self.handle_id_change(self.dict_id_var))
+
+        ttk.Label(self.details_frame, text="Key-Value Pairs").pack(pady=5)
+        tree_frame = ttk.Frame(self.details_frame)
+        tree_frame.pack(expand=True, fill='both', padx=5, pady=5)
+
+        self.tree = ttk.Treeview(tree_frame, columns=('Key', 'Value'), show='headings')
+        self.tree.heading('Key', text='Key')
+        self.tree.heading('Value', text='Value')
+        self.tree.pack(expand=True, fill='both')
+        self.tree.bind("<Double-1>", self.on_tree_double_click)
+
+        button_frame = ttk.Frame(self.details_frame)
+        button_frame.pack(fill='x', padx=5, pady=5)
+        ttk.Button(button_frame, text="Add Pair", command=self.add_pair).pack(side='left', fill='x', expand=True, padx=2)
+        ttk.Button(button_frame, text="Remove Pair", command=self.remove_pair).pack(side='left', fill='x', expand=True, padx=2)
+
+    def _create_form_row(self, parent, label_text, string_var):
+        row = ttk.Frame(parent)
+        row.pack(fill='x', pady=2)
+        ttk.Label(row, text=label_text, width=12, anchor='w').pack(side='left')
+        entry = ttk.Entry(row, textvariable=string_var)
+        entry.pack(side='left', expand=True, fill='x')
+        return entry
+
+    def _get_new_item_data_obj(self):
+        return {}
+
+    def _focus_on_main_field(self):
+        self.id_entry.focus_set()
+        self.id_entry.selection_range(0, tk.END)
+
+    def update_details_form(self):
+        if not self.selected_id: return
+        self.dict_id_var.set(self.selected_id)
+
+        selected_iid = self.tree.focus()
+        self.tree.delete(*self.tree.get_children())
+        dict_obj = self.model.dictionaries.get(self.selected_id)
+        if dict_obj:
+            for key, value in sorted(dict_obj.items()):
+                self.tree.insert('', tk.END, iid=key, values=(key, value))
+
+        if self.tree.exists(selected_iid):
+            self.tree.focus(selected_iid)
+            self.tree.selection_set(selected_iid)
+
+    def clear_details_form(self):
+        self.selected_id = None
+        self.dict_id_var.set("")
+        self.tree.delete(*self.tree.get_children())
+
+    def add_pair(self):
+        if not self.selected_id: return
+        self._new_key_counter += 1
+        temp_key = f"new_key_{self._new_key_counter}"
+        while temp_key in self.model.dictionaries[self.selected_id]:
+            self._new_key_counter += 1
+            temp_key = f"new_key_{self._new_key_counter}"
+
+        self.model.dictionaries[self.selected_id][temp_key] = "0"
+        self.model._mark_dirty()
+        self.update_details_form()
+        self.after(50, self._trigger_edit_on_new_pair, temp_key)
+
+    def _trigger_edit_on_new_pair(self, key: str):
+        if self.tree.exists(key):
+            self.tree.see(key)
+            self.tree.focus(key)
+            self.tree.selection_set(key)
+            self._edit_cell(key, 0)
+
+    def remove_pair(self):
+        if not self.selected_id or not self.tree.selection(): return
+        selected_item = self.tree.selection()[0]
+        key_to_remove = self.tree.item(selected_item, 'values')[0]
+        if messagebox.askyesno("Confirm", f"Remove the key '{key_to_remove}'?"):
+            del self.model.dictionaries[self.selected_id][key_to_remove]
+            self.model._mark_dirty()
+            self.update_details_form()
+
+    def on_tree_double_click(self, event):
+        if self.tree.identify_region(event.x, event.y) != "cell": return
+        column_id = self.tree.identify_column(event.x)
+        column_index = int(column_id.replace('#', '')) - 1
+        selected_iid = self.tree.focus()
+        self._edit_cell(selected_iid, column_index)
+
+    def _edit_cell(self, item_id: str, column_index: int):
+        if not item_id: return
+        x, y, width, height = self.tree.bbox(item_id, f"#{column_index + 1}")
+        val = self.tree.item(item_id, "values")[column_index]
+        entry_var = tk.StringVar(value=val)
+        entry = ttk.Entry(self.tree, textvariable=entry_var)
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.focus_set()
+        entry.selection_range(0, tk.END)
+
+        def on_focus_out(event):
+            new_value = entry_var.get()
+            entry.destroy()
+            current_values = list(self.tree.item(item_id, "values"))
+            old_key = current_values[0]
+
+            if column_index == 0: # Key changed
+                if new_value != old_key:
+                    if new_value in self.model.dictionaries[self.selected_id]:
+                        messagebox.showerror("Error", f"Key '{new_value}' already exists.")
+                        return
+                    self.model.dictionaries[self.selected_id][new_value] = current_values[1]
+                    del self.model.dictionaries[self.selected_id][old_key]
+            else: # Value changed
+                self.model.dictionaries[self.selected_id][old_key] = new_value
+
+            self.model._mark_dirty()
+            self.update_details_form()
+
+        entry.bind("<FocusOut>", on_focus_out)
+        entry.bind("<Return>", on_focus_out)
+
+
 # #########################################################################
 # CONTROLLER - The main application window that orchestrates everything.
 # #########################################################################
@@ -1173,6 +1468,8 @@ class App(tk.Tk):
         self.notebook.add(EntitiesTab(self.notebook, self.project_model), text="Entities")
         self.notebook.add(ItemsTab(self.notebook, self.project_model), text="Items")
         self.notebook.add(QuestsTab(self.notebook, self.project_model), text="Quests")
+        self.notebook.add(StringListsTab(self.notebook, self.project_model), text="String Lists")
+        self.notebook.add(DictionariesTab(self.notebook, self.project_model), text="Dictionaries")
         self.notebook.add(FunctionsTab(self.notebook, self.project_model), text="Functions")
         self.notebook.add(DialogsTab(self.notebook, self.project_model), text="Dialogs & Logic")
         
