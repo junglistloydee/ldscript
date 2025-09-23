@@ -256,6 +256,18 @@ class Interpreter:
                 properties, end_index = self._parse_quest_block(lines, i + 1)
                 self.game_state.quests[quest_id] = {'id': quest_id, 'name': quest_name, **properties}; i = end_index + 1; continue
 
+            match_list_def = re.match(r'string_list (\w+)', line)
+            if match_list_def:
+                name = match_list_def.group(1)
+                list_data, end_index = self._parse_string_list_block(lines, i + 1)
+                self.game_state.lists[name] = list_data; i = end_index + 1; continue
+
+            match_dict_def = re.match(r'dictionary (\w+)', line)
+            if match_dict_def:
+                name = match_dict_def.group(1)
+                dict_data, end_index = self._parse_dictionary_block(lines, i + 1)
+                self.game_state.dictionaries[name] = dict_data; i = end_index + 1; continue
+
             match_set_quest = re.match(r'set quest (\w+) to (\w+)', line)
             if match_set_quest:
                 quest_id, new_state = match_set_quest.groups()
@@ -283,6 +295,11 @@ class Interpreter:
             match_forget_skill = re.match(r'forget skill (\w+)', line)
             if match_forget_skill:
                 ast.append({'type': 'forget_skill', 'name': match_forget_skill.group(1)}); i += 1; continue
+
+            match_gain_xp = re.match(r'gain_xp (\w+) (.*)', line)
+            if match_gain_xp:
+                entity_id, amount_expr = match_gain_xp.groups()
+                ast.append({'type': 'gain_xp', 'entity_id': entity_id, 'amount': amount_expr}); i += 1; continue
 
             match_give = re.match(r'give (?:(\d+)\s+)?(\w+)', line)
             if match_give:
@@ -313,6 +330,14 @@ class Interpreter:
             if match_inventory:
                 ast.append({'type': 'inventory'}); i += 1; continue
 
+            match_equip = re.match(r'equip (\w+)', line)
+            if match_equip:
+                ast.append({'type': 'equip', 'item_id': match_equip.group(1)}); i += 1; continue
+
+            match_unequip = re.match(r'unequip (\w+)', line)
+            if match_unequip:
+                ast.append({'type': 'unequip', 'item_id': match_unequip.group(1)}); i += 1; continue
+
             match_attack = re.match(r'attack ([\w{}.-]+) on ([\w{}.-]+)(?: with ([\w{}.-]+))?', line)
             if match_attack:
                 attacker, target, weapon = match_attack.groups()
@@ -339,6 +364,21 @@ class Interpreter:
                 var_name, min_val, max_val = match_random.groups()
                 ast.append({'type': 'random', 'name': var_name.strip(), 'min': min_val.strip(), 'max': max_val.strip()}); i += 1; continue
 
+            match_random_choice = re.match(r'random_choice (\w+) as (\w+)', line)
+            if match_random_choice:
+                list_name, var_name = match_random_choice.groups()
+                ast.append({'type': 'random_choice', 'list_name': list_name, 'var_name': var_name}); i += 1; continue
+
+            match_gen_room_desc = re.match(r'generate_room_description as (\w+)', line)
+            if match_gen_room_desc:
+                var_name = match_gen_room_desc.group(1)
+                ast.append({'type': 'generate_room_description', 'var_name': var_name}); i += 1; continue
+
+            match_weighted_choice = re.match(r'weighted_random_choice (\w+) as (\w+)', line)
+            if match_weighted_choice:
+                dict_name, var_name = match_weighted_choice.groups()
+                ast.append({'type': 'weighted_random_choice', 'dict_name': dict_name, 'var_name': var_name}); i += 1; continue
+
             match_play_sound = re.match(r'play_sound (.*)', line)
             if match_play_sound:
                 ast.append({'type': 'play_sound', 'filepath': match_play_sound.group(1).strip()}); i += 1; continue
@@ -354,36 +394,48 @@ class Interpreter:
             raise SyntaxError(f"Expected one of '{end_keywords}' but reached end of file.")
         return ast, i
 
-    def _parse_entity_block(self, lines, index):
-        # This function remains unchanged
-        stats = {}; i = index
+    def _parse_key_value_block(self, lines, index, end_keyword):
+        """
+        Parses a generic block of key-value pairs, supporting nested blocks.
+        A line with a single word is treated as the key for a new nested block.
+        """
+        properties = {}
+        i = index
         while i < len(lines):
             line = lines[i]
-            if line == 'end entity': return stats, i
-            match_stat = re.match(r'stat (\w+) (.*)', line)
-            if match_stat:
-                name, value = match_stat.groups()
-                stats[name] = self._evaluate_expression(value)
-            else: raise SyntaxError(f"Invalid line in entity definition: {line}")
-            i += 1
-        raise SyntaxError("Expected 'end entity' but reached end of file.")
+            if line == end_keyword:
+                return properties, i
 
-    def _parse_item_block(self, lines, index):
-        properties = {}; i = index
-        while i < len(lines):
-            line = lines[i]
-            if line == 'end item': return properties, i
+            # Check for a nested block (e.g., 'effect_value')
+            match_block = re.match(r'^(\w+)$', line)
+            if match_block:
+                key = match_block.group(1)
+                nested_end_keyword = f"end {key}"
+                # Recursively parse the nested block
+                nested_properties, end_i = self._parse_key_value_block(lines, i + 1, nested_end_keyword)
+                properties[key] = nested_properties
+                i = end_i + 1
+                continue
+
+            # Check for a simple key-value pair (e.g., 'name "Iron Sword"')
             match_prop = re.match(r'(\w+)\s+(.*)', line)
             if match_prop:
                 key, value = match_prop.groups()
-                # Evaluate if not a string literal
-                if not (value.startswith('"') and value.endswith('"')):
-                    properties[key] = self._evaluate_expression(value)
-                else:
-                    properties[key] = value[1:-1]
-            else: raise SyntaxError(f"Invalid property line in item definition: {line}")
-            i += 1
-        raise SyntaxError("Expected 'end item' but reached end of file.")
+                properties[key] = self._evaluate_expression(value)
+                i += 1
+                continue
+
+            raise SyntaxError(f"Invalid line in block near '{line}'")
+
+        raise SyntaxError(f"Expected '{end_keyword}' but reached end of file.")
+
+    def _parse_entity_block(self, lines, index):
+        # Refactored to use the generic key-value block parser
+        return self._parse_key_value_block(lines, index, 'end entity')
+
+    def _parse_item_block(self, lines, index):
+        # Refactored to use the generic key-value block parser
+        return self._parse_key_value_block(lines, index, 'end item')
 
     def _parse_quest_block(self, lines, index):
         # This function remains unchanged
@@ -398,6 +450,36 @@ class Interpreter:
             else: raise SyntaxError(f"Invalid property line in quest definition: {line}")
             i += 1
         raise SyntaxError("Expected 'end quest' but reached end of file.")
+
+    def _parse_string_list_block(self, lines, index):
+        """Parses a block of strings for a string_list definition."""
+        items = []
+        i = index
+        while i < len(lines):
+            line = lines[i]
+            if line == 'end string_list':
+                return items, i
+            # Each line is a string item, remove quotes
+            items.append(line.strip('"'))
+            i += 1
+        raise SyntaxError("Expected 'end string_list' but reached end of file.")
+
+    def _parse_dictionary_block(self, lines, index):
+        """Parses a block of key-value pairs for a dictionary definition."""
+        properties = {}
+        i = index
+        while i < len(lines):
+            line = lines[i]
+            if line == 'end dictionary':
+                return properties, i
+            match_prop = re.match(r'(\w+)\s+(.*)', line)
+            if match_prop:
+                key, value = match_prop.groups()
+                properties[key] = self._evaluate_expression(value)
+            else:
+                raise SyntaxError(f"Invalid line in dictionary definition: {line}")
+            i += 1
+        raise SyntaxError("Expected 'end dictionary' but reached end of file.")
 
     def _execute_block(self, block):
         for command in block:
@@ -435,21 +517,135 @@ class Interpreter:
         except (ValueError, TypeError): print(f"Error: min/max for random must be ints.", file=sys.stderr)
         return None
 
+    def _execute_random_choice(self, command):
+        list_name = command['list_name']
+        var_name = command['var_name']
+
+        if list_name not in self.game_state.lists:
+            print(f"Error: List '{list_name}' not found.", file=sys.stderr)
+            return None
+
+        chosen_item = random.choice(self.game_state.lists[list_name])
+        self.game_state.variables[var_name] = chosen_item
+        return None
+
+    def _execute_generate_room_description(self, command):
+        var_name = command['var_name']
+
+        try:
+            adj = random.choice(self.game_state.lists['adjectives'])
+            room_type = random.choice(self.game_state.lists['room_types'])
+            detail = random.choice(self.game_state.lists['details'])
+        except KeyError as e:
+            print(f"Error: Missing required list for room generation: {e}", file=sys.stderr)
+            return None
+
+        description = f"You are in a {adj} {room_type}. You notice {detail}."
+        self.game_state.variables[var_name] = description
+        return None
+
+    def _execute_weighted_random_choice(self, command):
+        dict_name = command['dict_name']
+        var_name = command['var_name']
+
+        if dict_name not in self.game_state.dictionaries:
+            print(f"Error: Dictionary '{dict_name}' not found.", file=sys.stderr)
+            return None
+
+        choices_dict = self.game_state.dictionaries[dict_name]
+        population = list(choices_dict.keys())
+        weights = [float(w) for w in choices_dict.values()]
+
+        if not population:
+            print(f"Warning: Dictionary '{dict_name}' is empty.", file=sys.stderr)
+            return None
+
+        try:
+            chosen_item = random.choices(population, weights=weights, k=1)[0]
+            self.game_state.variables[var_name] = chosen_item
+        except (ValueError, TypeError) as e:
+            print(f"Error during weighted choice from '{dict_name}': {e}", file=sys.stderr)
+
+        return None
+
     def _execute_attack(self, command):
-        attacker_name = command['attacker']
-        target_name = command['target']
-        attacker = self.game_state.entities.get(attacker_name)
-        target = self.game_state.entities.get(target_name)
-        if not attacker or not target: print(f"Error: Attacker or target not found.", file=sys.stderr); return None
-        if attacker.get('health', 0) <= 0: print(f"Error: {attacker_name} is already defeated.", file=sys.stderr); return None
-        damage = random.randint(1, int(attacker.get('strength', 1)))
-        target['health'] = target.get('health', 0) - damage
-        print(f"{attacker_name} attacks {target_name} for {damage} damage!")
-        if target['health'] <= 0:
-            target['health'] = 0
-            print(f"{target_name} has been defeated.")
-            self.game_state.variables['last_death'] = target_name
+        attacker_id = self._evaluate_expression(command['attacker'])
+        target_id = self._evaluate_expression(command['target'])
+
+        attacker_entity = self.game_state.entities.get(attacker_id)
+        target_entity = self.game_state.entities.get(target_id)
+
+        if not attacker_entity or not target_entity:
+            print(f"Error: Attacker or target not found.", file=sys.stderr)
+            return None
+
+        if attacker_entity.get('health', 0) <= 0:
+            print(f"Error: {attacker_id} is already defeated.", file=sys.stderr)
+            return None
+        if target_entity.get('health', 0) <= 0:
+            print(f"Error: {target_id} is already defeated.", file=sys.stderr)
+            return None
+
+        # --- Calculate Attacker's Power ---
+        base_attack = int(attacker_entity.get('strength', 5))
+        variance = int(attacker_entity.get('damage_variance', 1))
+        crit_chance = float(attacker_entity.get('crit_chance', 0.1))
+        crit_multiplier = float(attacker_entity.get('crit_multiplier', 1.5))
+
+        # Add weapon damage if the attacker is the player
+        # For now, we assume only the main player has equipment state
+        # A more robust system would check if the attacker_id matches a player with an equipment state
+        if attacker_id == self.player_id and self.game_state.equipped_weapon:
+            base_attack += int(self.game_state.equipped_weapon.get('damage', 0))
+
+        # --- Calculate Target's Defense ---
+        total_defense = 0
+        if target_id == self.player_id: # Simplified: only player has defense
+            if self.game_state.equipped_shield:
+                total_defense += int(self.game_state.equipped_shield.get('defense', 0))
+            if self.game_state.equipped_armor:
+                total_defense += int(self.game_state.equipped_armor.get('defense', 0))
+            if self.game_state.equipped_cloak:
+                total_defense += int(self.game_state.equipped_cloak.get('defense', 0))
+        else: # For monsters
+            total_defense = int(target_entity.get('defense', 0))
+
+
+        # --- Calculate Damage ---
+        damage = random.randint(base_attack - variance, base_attack + variance)
+
+        is_crit = random.random() < crit_chance
+        if is_crit:
+            damage = int(damage * crit_multiplier)
+
+        final_damage = max(0, damage - total_defense)
+        target_entity['health'] = target_entity.get('health', 0) - final_damage
+
+        # --- Print Combat Log ---
+        if is_crit:
+            print(f"CRITICAL HIT! {attacker_id} strikes {target_id} for {damage} damage!")
+        else:
+            print(f"{attacker_id} strikes {target_id} for {damage} damage!")
+
+        if total_defense > 0:
+            absorbed = damage - final_damage
+            print(f"{target_id}'s armor absorbed {absorbed} damage.")
+
+        print(f"{target_id} takes {final_damage} damage. Health is now {target_entity.get('health', 0)}.")
+
+        # --- Check for Defeat ---
+        if target_entity.get('health', 0) <= 0:
+            target_entity['health'] = 0
+            print(f"{target_id} has been defeated.")
+            self.game_state.variables['last_death'] = target_id
+
+            # Grant XP to the attacker
+            xp_reward = int(target_entity.get('xp_reward', 0))
+            if xp_reward > 0:
+                self._execute_gain_xp({'entity_id': attacker_id, 'amount': xp_reward})
+
             self._trigger_event('death')
+
         return None
 
     def _execute_play_sound(self, command):
@@ -717,6 +913,142 @@ class Interpreter:
         self.game_state.variables['gold'] = self.game_state.variables.get('gold', 0) + total_gain
 
         print(f"You sold {count}x {item_def.get('name', item_id)} for {total_gain} gold.")
+        return None
+
+    def _execute_equip(self, command):
+        item_id_to_equip = command['item_id']
+
+        item_to_equip = None
+        for item in self.game_state.inventory:
+            if item.get('id') == item_id_to_equip:
+                item_to_equip = item
+                break
+
+        if not item_to_equip:
+            print(f"Error: Item '{item_id_to_equip}' not found in inventory.", file=sys.stderr)
+            return
+
+        item_type = item_to_equip.get('type')
+        item_subtype = item_to_equip.get('subtype')
+
+        slot_to_update = None
+        if item_type == 'weapon':
+            slot_to_update = 'equipped_weapon'
+        elif item_type == 'shield':
+            slot_to_update = 'equipped_shield'
+        elif item_type == 'armor' and (item_subtype == 'body_armor' or not item_subtype):
+            slot_to_update = 'equipped_armor'
+        elif item_type == 'armor' and item_subtype == 'cloak':
+            slot_to_update = 'equipped_cloak'
+        elif item_type == 'equipment':
+            self.game_state.equipped_misc.append(item_to_equip)
+            self.game_state.inventory.remove(item_to_equip)
+            print(f"Equipped {item_to_equip.get('name', item_id_to_equip)}.")
+            return
+        else:
+            print(f"Error: Item '{item_id_to_equip}' of type '{item_type}' is not equippable.", file=sys.stderr)
+            return
+
+        currently_equipped = getattr(self.game_state, slot_to_update)
+        if currently_equipped:
+            self.game_state.inventory.append(currently_equipped)
+            print(f"Unequipped {currently_equipped.get('name', 'item')}.")
+
+        setattr(self.game_state, slot_to_update, item_to_equip)
+        self.game_state.inventory.remove(item_to_equip)
+        print(f"Equipped {item_to_equip.get('name', item_id_to_equip)}.")
+        return None
+
+    def _execute_unequip(self, command):
+        item_id_to_unequip = command['item_id']
+
+        slot_to_clear = None
+        equipped_item = None
+
+        if self.game_state.equipped_weapon and self.game_state.equipped_weapon.get('id') == item_id_to_unequip:
+            slot_to_clear = 'equipped_weapon'
+            equipped_item = self.game_state.equipped_weapon
+        elif self.game_state.equipped_shield and self.game_state.equipped_shield.get('id') == item_id_to_unequip:
+            slot_to_clear = 'equipped_shield'
+            equipped_item = self.game_state.equipped_shield
+        elif self.game_state.equipped_armor and self.game_state.equipped_armor.get('id') == item_id_to_unequip:
+            slot_to_clear = 'equipped_armor'
+            equipped_item = self.game_state.equipped_armor
+        elif self.game_state.equipped_cloak and self.game_state.equipped_cloak.get('id') == item_id_to_unequip:
+            slot_to_clear = 'equipped_cloak'
+            equipped_item = self.game_state.equipped_cloak
+        else:
+            for item in self.game_state.equipped_misc:
+                if item.get('id') == item_id_to_unequip:
+                    equipped_item = item
+                    break
+            if equipped_item:
+                 self.game_state.equipped_misc.remove(equipped_item)
+                 self.game_state.inventory.append(equipped_item)
+                 print(f"Unequipped {equipped_item.get('name', item_id_to_unequip)}.")
+                 return None
+
+        if not slot_to_clear:
+            print(f"Error: Item '{item_id_to_unequip}' is not equipped.", file=sys.stderr)
+            return None
+
+        setattr(self.game_state, slot_to_clear, None)
+        self.game_state.inventory.append(equipped_item)
+        print(f"Unequipped {equipped_item.get('name', item_id_to_unequip)}.")
+        return None
+
+    def _level_up(self, entity_id):
+        player = self.game_state.entities.get(entity_id)
+        if not player:
+            return
+
+        # Get leveling constants from game state variables
+        hp_gain = int(self._evaluate_expression('HP_GAIN_PER_LEVEL'))
+        attack_gain = int(self._evaluate_expression('ATTACK_GAIN_PER_LEVEL'))
+        crit_chance_gain = float(self._evaluate_expression('CRIT_CHANCE_GAIN_PER_LEVEL'))
+
+        player['level'] = int(player.get('level', 1)) + 1
+
+        old_max_hp = int(player.get('max_hp', 100))
+        player['max_hp'] = old_max_hp + hp_gain
+        player['health'] = player['max_hp'] # Full heal on level up
+
+        player['strength'] = int(player.get('strength', 5)) + attack_gain
+        player['crit_chance'] = float(player.get('crit_chance', 0.1)) + crit_chance_gain
+
+        print(f"\n--- {entity_id} has reached Level {player['level']}! ---")
+        print(f"Max HP increased from {old_max_hp} to {player['max_hp']}!")
+        print(f"Strength increased to {player['strength']}!")
+        print(f"Critical Chance increased to {player['crit_chance']:.2f}!")
+        print("--------------------------------------------------")
+
+        # Calculate XP for next level
+        base_xp = int(self._evaluate_expression('BASE_XP_TO_LEVEL_UP'))
+        scale_factor = float(self._evaluate_expression('XP_SCALE_FACTOR'))
+        player['xp_to_next_level'] = int(base_xp * (scale_factor ** (player['level'] - 1)))
+
+
+    def _execute_gain_xp(self, command):
+        entity_id = self._evaluate_expression(command['entity_id'])
+        amount = int(self._evaluate_expression(command['amount']))
+
+        player = self.game_state.entities.get(entity_id)
+        if not player:
+            print(f"Error: Cannot grant XP to non-existent entity '{entity_id}'.", file=sys.stderr)
+            return None
+
+        current_xp = int(player.get('xp', 0))
+        player['xp'] = current_xp + amount
+        print(f"{entity_id} gained {amount} XP.")
+
+        # Check for level up
+        xp_to_next = int(player.get('xp_to_next_level', 100))
+        while player['xp'] >= xp_to_next:
+            player['xp'] -= xp_to_next
+            self._level_up(entity_id)
+            # After leveling up, the xp_to_next_level is recalculated inside _level_up
+            xp_to_next = int(player.get('xp_to_next_level'))
+
         return None
 
     def _evaluate_expression(self, expr_str):
