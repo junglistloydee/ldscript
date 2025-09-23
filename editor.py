@@ -9,14 +9,8 @@ import sys
 from typing import Dict, Any, List, Optional, Callable
 from enum import Enum
 from dataclasses import dataclass, field, asdict
+from ld_parser import LdParser
 
-# --- A mock parser for demonstration if ld_parser.py is not available ---
-class LdParser:
-    """A mock parser for demonstration purposes."""
-    def parse(self, filepath: str) -> Dict[str, Any]:
-        messagebox.showinfo("Info", "This is a mock parser. Implement your .ld parsing logic here.")
-        return {}
-# --------------------------------------------------------------------------
 
 APP_ROOT = Path(__file__).resolve().parent
 
@@ -119,6 +113,36 @@ class ProjectModel:
         self.functions_node_counter = project_data.get("functions_node_counter", 0)
         
         self.is_dirty = False
+        self._notify_observers()
+
+    def load_from_parsed_ld(self, parsed_data: Dict[str, Any]):
+        """Loads data from a parsed .ld file into the model."""
+        self._initialize_data()
+
+        # Convert parsed dicts into dataclass objects
+        self.entities = {k: Entity(**v) for k, v in parsed_data.get("entities", {}).items()}
+        self.items = {k: Item(properties=v) for k, v in parsed_data.get("items", {}).items()}
+
+        # The quest parser returns a dict with 'id' and 'name', we need to map it
+        # to the Quest dataclass which has name, description, state.
+        self.quests = {}
+        for k, v in parsed_data.get("quests", {}).items():
+            self.quests[k] = Quest(
+                name=v.get("name", "New Quest"),
+                description=v.get("description", ""),
+                state=v.get("state", "inactive")
+            )
+
+        self.functions = parsed_data.get("functions", {})
+        self.dialogs = parsed_data.get("dialogs", {})
+
+        # Since we don't parse node counters, we can try to infer them,
+        # but for now, resetting is fine. A more robust solution could
+        # parse the max ID number from the nodes.
+        self.dialogs_node_counter = 0
+        self.functions_node_counter = 0
+
+        self.is_dirty = True
         self._notify_observers()
 
     def save_project(self, filepath: Optional[str] = None) -> None:
@@ -1452,6 +1476,8 @@ class App(tk.Tk):
         file_menu.add_command(label="New Project", command=self.new_project)
         file_menu.add_separator()
         file_menu.add_command(label="Open Project", command=self.open_project)
+        file_menu.add_command(label="Import .ld File...", command=self.import_ld_project)
+        file_menu.add_separator()
         file_menu.add_command(label="Save Project", command=self.save_project)
         file_menu.add_command(label="Save Project As...", command=self.save_project_as)
         file_menu.add_separator()
@@ -1506,6 +1532,36 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load project: {e}")
             self.project_model.new_project()
+
+    def import_ld_project(self):
+        if not self._check_unsaved_changes():
+            return
+        filepath = filedialog.askopenfilename(
+            title="Import .ld File",
+            filetypes=[("LDScript Files", "*.ld"), ("All files", "*.*")]
+        )
+        if not filepath:
+            return
+
+        try:
+            parser = LdParser()
+            parsed_data = parser.parse(filepath)
+
+            # This method will be created in the next step
+            self.project_model.load_from_parsed_ld(parsed_data)
+
+            self.show_status(f"Successfully imported {filepath}")
+            # Mark as dirty so the user is prompted to save it in the editor's format
+            self.project_model._mark_dirty()
+            # Clear the filepath so "Save" prompts for a new .json file location
+            self.project_model.filepath = None
+            self.update_app_view("app_update")
+
+        except (FileNotFoundError, SyntaxError) as e:
+            messagebox.showerror("Import Error", f"Failed to import file: {e}")
+        except Exception as e:
+            messagebox.showerror("Import Error", f"An unexpected error occurred: {e}")
+            self.project_model.new_project() # Reset on critical failure
 
     def save_project(self) -> bool:
         if not self.project_model.filepath:
