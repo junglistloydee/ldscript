@@ -192,7 +192,9 @@ class ProjectModel:
 
     def update_data_item_details(self, category: DataCategory, item_id: str, new_data_obj: Any):
         self._update_item_details(category, item_id, new_data_obj)
-        # No observer notification here as it's triggered by live tracing
+        # No observer notification here as it's triggered by live tracing,
+        # but it's necessary to persist the changes.
+        self._notify_observers(f"{category.value}_update")
 
     # --- Entity-specific methods ---
     def update_entity_stat(self, entity_id: str, stat_name: str, new_value: Any, old_stat_name: Optional[str] = None):
