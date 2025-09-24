@@ -37,7 +37,12 @@ say "Crit Chance: {player_1.crit_chance}"
 say "---------------------------"
 
 say "\n--- Defeating the XP Dummy ---"
-attack player_1 on xp_dummy
+loop 5 times
+    if xp_dummy.health <= 0
+        break
+    end
+    attack player_1 on xp_dummy
+end
 say "------------------------------"
 
 say "\n--- Player Stats After ---"

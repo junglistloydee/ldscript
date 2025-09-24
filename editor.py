@@ -1485,7 +1485,7 @@ class App(tk.Tk):
         self.menu_bar.add_cascade(label="File", menu=file_menu)
         game_menu = tk.Menu(self.menu_bar, tearoff=0)
         game_menu.add_command(label="Generate main.ld File", command=self.generate_code)
-        game_menu.add_command(label="Run Game", command=self.run_game, state="disabled")
+        game_menu.add_command(label="Run Game", command=self.run_game)
         self.menu_bar.add_cascade(label="Game", menu=game_menu)
         
     def _setup_notebook(self):
@@ -1607,9 +1607,53 @@ class App(tk.Tk):
         self._show_game_console(str(temp_filepath))
 
     def _show_game_console(self, filepath_to_run):
-        # Implementation for this would be platform and project specific
-        # and remains unchanged. A placeholder:
-        messagebox.showinfo("Run Game", "Game console would open here, running the generated script.")
+        """Opens a new terminal to run the game, handling different platforms."""
+        command = [sys.executable, str(APP_ROOT / "ldscript_interpreter.py"), filepath_to_run]
+
+        console_window = tk.Toplevel(self)
+        console_window.title("Game Console")
+        console_window.geometry("800x600")
+
+        text_area = scrolledtext.ScrolledText(console_window, wrap=tk.WORD, bg="black", fg="white")
+        text_area.pack(expand=True, fill='both')
+        text_area.configure(state='disabled')
+
+        def run_in_thread():
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
+
+            # Read stdout
+            for line in iter(process.stdout.readline, ''):
+                self.after(0, lambda l=line: update_text(l))
+
+            # Read stderr
+            for line in iter(process.stderr.readline, ''):
+                 self.after(0, lambda l=line: update_text(l, is_error=True))
+
+            process.stdout.close()
+            process.stderr.close()
+            process.wait()
+            self.after(0, lambda: update_text("\n--- SCRIPT FINISHED ---"))
+
+        def update_text(line, is_error=False):
+            text_area.configure(state='normal')
+            if is_error:
+                text_area.insert(tk.END, line, 'error')
+            else:
+                text_area.insert(tk.END, line)
+            text_area.see(tk.END)
+            text_area.configure(state='disabled')
+
+        text_area.tag_config('error', foreground='red')
+
+        thread = threading.Thread(target=run_in_thread, daemon=True)
+        thread.start()
 
     def show_status(self, message: str, duration_ms: int = 4000):
         self.status_var.set(message)
