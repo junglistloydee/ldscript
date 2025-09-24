@@ -296,7 +296,7 @@ class Interpreter:
             if match_forget_skill:
                 ast.append({'type': 'forget_skill', 'name': match_forget_skill.group(1)}); i += 1; continue
 
-            match_gain_xp = re.match(r'gain_xp (\w+) (.*)', line)
+            match_gain_xp = re.match(r'gain_xp ([\w{}.-]+) (.*)', line)
             if match_gain_xp:
                 entity_id, amount_expr = match_gain_xp.groups()
                 ast.append({'type': 'gain_xp', 'entity_id': entity_id, 'amount': amount_expr}); i += 1; continue
@@ -329,6 +329,10 @@ class Interpreter:
             match_inventory = re.match(r'inventory', line)
             if match_inventory:
                 ast.append({'type': 'inventory'}); i += 1; continue
+
+            match_equipment = re.match(r'equipment', line)
+            if match_equipment:
+                ast.append({'type': 'equipment'}); i += 1; continue
 
             match_equip = re.match(r'equip (\w+)', line)
             if match_equip:
@@ -417,8 +421,8 @@ class Interpreter:
                 i = end_i + 1
                 continue
 
-            # Check for a simple key-value pair (e.g., 'name "Iron Sword"')
-            match_prop = re.match(r'(\w+)\s+(.*)', line)
+            # Check for a simple key-value pair (e.g., 'stat name "Iron Sword"' or 'name "Iron Sword"')
+            match_prop = re.match(r'(?:stat\s+)?(\w+)\s+(.*)', line)
             if match_prop:
                 key, value = match_prop.groups()
                 properties[key] = self._evaluate_expression(value)
@@ -805,6 +809,31 @@ class Interpreter:
         self.game_state.inventory = new_inventory
         return None
 
+    def _execute_equipment(self, command):
+        print("Your equipment:")
+        slots = {
+            "Weapon": self.game_state.equipped_weapon,
+            "Shield": self.game_state.equipped_shield,
+            "Armor": self.game_state.equipped_armor,
+            "Cloak": self.game_state.equipped_cloak,
+        }
+
+        equipped_found = False
+        for slot, item in slots.items():
+            if item:
+                print(f"  - {slot}: {item.get('name', item.get('id'))}")
+                equipped_found = True
+
+        if self.game_state.equipped_misc:
+            for i, item in enumerate(self.game_state.equipped_misc):
+                print(f"  - Misc {i+1}: {item.get('name', item.get('id'))}")
+                equipped_found = True
+
+        if not equipped_found:
+            print("  - Nothing equipped")
+
+        return None
+
     def _execute_inventory(self, command):
         print("Your inventory:")
         if not self.game_state.inventory:
@@ -997,6 +1026,29 @@ class Interpreter:
         print(f"Unequipped {equipped_item.get('name', item_id_to_unequip)}.")
         return None
 
+    def _execute_gain_xp(self, command):
+        entity_id = self._evaluate_expression(command['entity_id'])
+        amount = int(self._evaluate_expression(command['amount']))
+
+        player = self.game_state.entities.get(entity_id)
+        if not player:
+            print(f"Error: Cannot grant XP to non-existent entity '{entity_id}'.", file=sys.stderr)
+            return None
+
+        current_xp = int(player.get('xp', 0))
+        player['xp'] = current_xp + amount
+        print(f"{entity_id} gained {amount} XP.")
+
+        # Check for level up
+        xp_to_next = int(player.get('xp_to_next_level', 100))
+        while player['xp'] >= xp_to_next:
+            player['xp'] -= xp_to_next
+            self._level_up(entity_id)
+            # After leveling up, the xp_to_next_level is recalculated inside _level_up
+            xp_to_next = int(player.get('xp_to_next_level'))
+
+        return None
+
     def _level_up(self, entity_id):
         player = self.game_state.entities.get(entity_id)
         if not player:
@@ -1026,30 +1078,6 @@ class Interpreter:
         base_xp = int(self._evaluate_expression('BASE_XP_TO_LEVEL_UP'))
         scale_factor = float(self._evaluate_expression('XP_SCALE_FACTOR'))
         player['xp_to_next_level'] = int(base_xp * (scale_factor ** (player['level'] - 1)))
-
-
-    def _execute_gain_xp(self, command):
-        entity_id = self._evaluate_expression(command['entity_id'])
-        amount = int(self._evaluate_expression(command['amount']))
-
-        player = self.game_state.entities.get(entity_id)
-        if not player:
-            print(f"Error: Cannot grant XP to non-existent entity '{entity_id}'.", file=sys.stderr)
-            return None
-
-        current_xp = int(player.get('xp', 0))
-        player['xp'] = current_xp + amount
-        print(f"{entity_id} gained {amount} XP.")
-
-        # Check for level up
-        xp_to_next = int(player.get('xp_to_next_level', 100))
-        while player['xp'] >= xp_to_next:
-            player['xp'] -= xp_to_next
-            self._level_up(entity_id)
-            # After leveling up, the xp_to_next_level is recalculated inside _level_up
-            xp_to_next = int(player.get('xp_to_next_level'))
-
-        return None
 
     def _evaluate_expression(self, expr_str):
         expr_str = str(expr_str).strip()
